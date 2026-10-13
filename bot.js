@@ -49,30 +49,40 @@ import puppeteer from 'puppeteer';
     console.log("ログインボタンを押しました。画面切り替えを待ちます...");
     await new Promise(r => setTimeout(r, 5000));
 
-    // 5. 投稿欄の出現を待つ
+    // 5. ポップアップの「スキップ」などを探して閉じる
+    await page.evaluate(() => {
+      const elements = document.querySelectorAll('button, div, span, a');
+      for (let el of elements) {
+        const text = (el.innerText || '').trim();
+        if (text === 'スキップ' || text === '×' || text === '閉じる' || text === 'OK') {
+          el.click();
+          break;
+        }
+      }
+    });
+    await new Promise(r => setTimeout(r, 1000));
+
+    // 6. 投稿欄の出現を待つ
     await page.waitForSelector('#c-body', { timeout: 10000 });
     console.log("投稿欄を発見！メッセージを入力します...");
 
     await page.type('#c-body', message, { delay: 50 });
 
-    // 6. 投稿ボタンをクリック（ネットワークの通信が落ち着くまで待つオプションを追加）
-    await Promise.all([
-      page.evaluate(() => {
-        const buttons = document.querySelectorAll('button');
-        for (let btn of buttons) {
-          if (btn.textContent.includes('投稿')) {
-            btn.click();
-            break;
-          }
+    // 7. 投稿ボタンをクリック
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      for (let btn of buttons) {
+        if (btn.textContent.includes('投稿')) {
+          btn.click();
+          break;
         }
-      }),
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {})
-    ]);
+      }
+    });
 
-    // 7. 投稿結果確認用のスクショを保存
+    // 8. 結果確認用のスクショを保存
     await new Promise(r => setTimeout(r, 3000));
     await page.screenshot({ path: 'success-result.png', fullPage: true });
-    console.log("投稿処理が完了しました。結果画面のスクショを保存しました。");
+    console.log("投稿処理が完了しました。");
 
   } catch (error) {
     console.error("エラー発生: ", error);
