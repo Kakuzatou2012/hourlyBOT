@@ -1,0 +1,8 @@
+{
+  "name": "national-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  }
+}
