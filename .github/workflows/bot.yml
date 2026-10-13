@@ -1,0 +1,22 @@
+name: Hourly Bot
+
+on:
+  schedule:
+    # 1時間ごとに実行
+    - cron: '0 * * * *'
+  workflow_dispatch: # 手動実行用
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run script
+        run: node bot.js
