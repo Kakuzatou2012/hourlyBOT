@@ -2,8 +2,21 @@ import puppeteer from 'puppeteer';
 
 (async () => {
   const date = new Date();
-  const jstHours = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })).getHours();
+  const jstDate = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+  const jstHours = jstDate.getHours();
+  const jstMinutes = jstDate.getMinutes();
+
   const message = `【アナウンス】${jstHours}時になりました。`;
+
+  console.log(`現在のJST時刻: ${jstHours}時${jstMinutes}分`);
+
+  // ⚠️ ピッタシの時間（0分）のときだけ投稿するガード
+  // ※もしGitHub Actionsのcronの遅延を考慮するなら jstMinutes <= 1 とかにしてもOK
+  const isExactHour = (jstMinutes === 0);
+
+  if (!isExactHour) {
+    console.log(`【ガード発動】現在は ${jstMinutes}分 のため、定刻（0分）ではないため投稿をスキップします。`);
+  }
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -49,7 +62,7 @@ import puppeteer from 'puppeteer';
     console.log("ログインボタンを押しました。画面切り替えを待ちます...");
     await new Promise(r => setTimeout(r, 6000));
 
-    // ★ 5. 「スキップ」ボタン（クラス: btn ghost small）をピンポイントでクリックして閉じる
+    // 5. 「スキップ」ボタンをピンポイントでクリックして閉じる
     const skipClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
@@ -65,8 +78,6 @@ import puppeteer from 'puppeteer';
 
     if (skipClicked) {
       console.log("「スキップ」ボタンをクリックしました。");
-    } else {
-      console.log("「スキップ」ボタンが見つからなかったため、そのまま進みます。");
     }
     
     await new Promise(r => setTimeout(r, 2000));
@@ -78,13 +89,19 @@ import puppeteer from 'puppeteer';
     await page.type('#c-body', message, { delay: 50 });
     await new Promise(r => setTimeout(r, 1000));
 
-    // ★ 7. 「投稿」ボタン（テキスト「投稿」、クラス「btn」）をピンポイントでクリック
+    // 7. 定刻（0分）じゃなければここでストップ
+    if (!isExactHour) {
+      console.log("テスト実行または定刻外のため、投稿ボタンは押さずに終了します。");
+      await page.screenshot({ path: 'success-result.png', fullPage: true });
+      return;
+    }
+
+    // 8. 「投稿」ボタンをクリック（定刻のときだけ実行される）
     const postClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
         const text = (btn.innerText || btn.textContent || '').trim();
         const className = btn.className || '';
-        // ほかのボタン（「投稿する」など）と混ざらないよう、厳密に「投稿」というテキストに一致させる
         if (text === '投稿' && className.includes('btn')) {
           ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(eventType => {
             btn.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true, view: window }));
@@ -101,7 +118,7 @@ import puppeteer from 'puppeteer';
 
     console.log("投稿ボタンをクリックしました。");
 
-    // 8. 結果確認用のスクショを保存
+    // 9. 結果確認用のスクショを保存
     await new Promise(r => setTimeout(r, 4000));
     await page.screenshot({ path: 'success-result.png', fullPage: true });
     console.log("処理が完了しました。");
