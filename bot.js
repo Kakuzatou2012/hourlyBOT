@@ -1,12 +1,10 @@
 import puppeteer from 'puppeteer';
 
 (async () => {
-  // 現在の日本時間を取得
   const date = new Date();
   const jstHours = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })).getHours();
   const message = `【BOT】${jstHours}時になりました。`;
 
-  // ブラウザを起動（ヘッドレスモード）
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -15,44 +13,44 @@ import puppeteer from 'puppeteer';
   const page = await browser.newPage();
 
   try {
-    // サイトにアクセス
+    // 1. サイトにアクセス
     await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
 
-    // ログイン情報の入力
+    // 2. ログイン情報の入力（IDとパスワード）
     await page.waitForSelector('#a-handle', { timeout: 10000 });
     await page.type('#a-handle', 'kakuzatou');
     await page.type('#a-pass', 't20120627');
 
-    // ログインボタンをクリック
+    // 3. 「ログイン」ボタンを確実にクリック
     await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, input.btn, .btn');
-      for (let el of buttons) {
-        if ((el.innerText || el.value || '').trim() === 'ログイン') {
-          el.click();
-          break;
-        }
-      }
-    });
-
-    // ログイン後の画面切り替えを待つ
-    await new Promise(r => setTimeout(r, 4000));
-
-    // 投稿欄にメッセージを入力
-    await page.waitForSelector('#c-body', { timeout: 5000 });
-    await page.type('#c-body', message);
-
-    // 投稿ボタンをクリック
-    await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, input.btn');
+      const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
-        if ((btn.innerText || btn.value || '').trim() === '投稿') {
+        if (btn.textContent.includes('ログイン')) {
           btn.click();
           break;
         }
       }
     });
 
-    // 投稿が完了するのを少し待つ
+    // 4. ログイン後の画面に切り替わるのをしっかり待つ
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+
+    // 5. 投稿欄が表示されるのを待つ
+    await page.waitForSelector('#c-body', { timeout: 10000 });
+    await page.type('#c-body', message);
+
+    // 6. 「投稿」ボタンをクリック
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      for (let btn of buttons) {
+        if (btn.textContent.includes('投稿')) {
+          btn.click();
+          break;
+        }
+      }
+    });
+
     await new Promise(r => setTimeout(r, 3000));
     console.log("投稿成功: " + message);
 
