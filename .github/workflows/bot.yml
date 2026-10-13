@@ -23,9 +23,10 @@ jobs:
       - name: Run script
         run: node bot.js
 
-      - name: Upload debug screenshot on failure
+      - name: Upload result screenshot
         uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: error-screenshot
-          path: error-debug.png
+          name: result-screenshot
+          path: '*.png'
+          
