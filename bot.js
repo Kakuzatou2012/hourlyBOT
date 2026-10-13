@@ -8,8 +8,8 @@ import puppeteer from 'puppeteer';
 
   console.log(`【通常BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // 0分以外のときはスキップ
-  if (jstMinutes !== 0) {
+  // 0〜3分以内の遅延なら許容する
+  if (jstMinutes > 3) {
     console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
     return;
   }
