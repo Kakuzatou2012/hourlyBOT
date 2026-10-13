@@ -14,7 +14,7 @@ import puppeteer from 'puppeteer';
     return;
   }
 
-  const message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
+  const message = `【全国アナウンス（BOT）】\n${jstHours}時になりました。`;
 
   const browser = await puppeteer.launch({
     headless: true,
