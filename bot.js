@@ -8,11 +8,14 @@ import puppeteer from 'puppeteer';
 
   console.log(`現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
+  // テスト用に時間ガードを一時的にコメントアウト中
+  /*
   const isExactHour = (jstMinutes === 0);
   if (!isExactHour) {
     console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
     return;
   }
+  */
 
   // 時間によって投稿内容を切り替える
   let message = '';
@@ -80,7 +83,8 @@ import puppeteer from 'puppeteer';
     await page.type('#c-body', message, { delay: 50 });
     await new Promise(r => setTimeout(r, 1000));
 
-    // 朝4時なら画像を添付する
+    // 朝4時の動作テストをしたい場合は、一時的に条件を true にして強制テストも可能
+    // let isMorningBot = true; ならば確実に画像添付ルートを通ります
     if (isMorningBot) {
       console.log("朝4時のため、画像を添付します...");
       const input = await page.$('input[type="file"]');
