@@ -77,17 +77,17 @@ import puppeteer from 'puppeteer';
     }
     await new Promise(r => setTimeout(r, 2000));
 
-    // 添付直後のスクショを必ず保存
+    // 添付直後のスクショを保存
     await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
     console.log("添付直後のスクショを保存しました。");
 
-    // 4時0分以外（手動テスト時など）は投稿ボタンを押さずに終了するガード
+    // 本番用の時間ガード（朝4時0分以外はここでストップ）
     if (jstHours !== 4 || jstMinutes !== 0) {
-      console.log(`【テスト停止】現在は JST ${jstHours}:${jstMinutes} のため投稿ボタンは押さずに終了します。`);
+      console.log(`【ガード発動】現在は JST ${jstHours}:${jstMinutes} のため投稿ボタンは押さずに終了します。`);
       return;
     }
 
-    // 投稿ボタンをクリック（4時0分の場合のみ実行）
+    // 投稿ボタンをクリック（朝4時0分の場合のみ実行）
     const postClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
