@@ -8,9 +8,6 @@ import puppeteer from 'puppeteer';
 
   console.log(`【4am BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // テスト用：ぴったし4時（0分）かどうかの判定
-  const isExactHour = (jstMinutes === 0);
-
   const message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？`;
 
   const browser = await puppeteer.launch({
@@ -80,19 +77,17 @@ import puppeteer from 'puppeteer';
     }
     await new Promise(r => setTimeout(r, 2000));
 
-    // 添付直後のスクショ（これでArtifactsに絶対残る）
+    // 添付直後のスクショを必ず保存
     await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
     console.log("添付直後のスクショを保存しました。");
 
-    /*
-    // 本番用の時間ガード（今はテスト用にコメントアウト中。4時0分以外はここでストップ）
-    if (!isExactHour) {
-      console.log(`【テスト停止】現在は ${jstMinutes}分 のため、投稿ボタンは押さずに終了します。`);
+    // 4時0分以外（手動テスト時など）は投稿ボタンを押さずに終了するガード
+    if (jstHours !== 4 || jstMinutes !== 0) {
+      console.log(`【テスト停止】現在は JST ${jstHours}:${jstMinutes} のため投稿ボタンは押さずに終了します。`);
       return;
     }
-    */
 
-    // 投稿ボタンをクリック
+    // 投稿ボタンをクリック（4時0分の場合のみ実行）
     const postClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
