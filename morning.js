@@ -81,13 +81,13 @@ import puppeteer from 'puppeteer';
     await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
     console.log("添付直後のスクショを保存しました。");
 
-    // 本番用の時間ガード（朝4時0分以外はここでストップ）
-    if (jstHours !== 4 || jstMinutes !== 0) {
+    // 本番用の時間ガード（朝4時かつ0〜3分以内以外はストップ）
+    if (jstHours !== 4 || jstMinutes > 3) {
       console.log(`【ガード発動】現在は JST ${jstHours}:${jstMinutes} のため投稿ボタンは押さずに終了します。`);
       return;
     }
 
-    // 投稿ボタンをクリック（朝4時0分の場合のみ実行）
+    // 投稿ボタンをクリック
     const postClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
