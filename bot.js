@@ -8,18 +8,12 @@ import puppeteer from 'puppeteer';
 
   console.log(`現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // テスト用に時間ガードを一時的にコメントアウト中
-  /*
+  // テスト用に時間ガードは外しておくけど、ぴったし判定に使うよ
   const isExactHour = (jstMinutes === 0);
-  if (!isExactHour) {
-    console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
-    return;
-  }
-  */
 
-  // 時間によって投稿内容を切り替える
-  let message = '';
+  // 朝4時モード（テスト用に固定したい場合は true にしてね）
   let isMorningBot = (jstHours === 4);
+  let message = '';
 
   if (isMorningBot) {
     message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？`;
@@ -83,8 +77,7 @@ import puppeteer from 'puppeteer';
     await page.type('#c-body', message, { delay: 50 });
     await new Promise(r => setTimeout(r, 1000));
 
-    // 朝4時の動作テストをしたい場合は、一時的に条件を true にして強制テストも可能
-    // let isMorningBot = true; ならば確実に画像添付ルートを通ります
+    // 朝4時なら画像を添付する
     if (isMorningBot) {
       console.log("朝4時のため、画像を添付します...");
       const input = await page.$('input[type="file"]');
@@ -99,6 +92,12 @@ import puppeteer from 'puppeteer';
       // 添付直後のスクショ
       await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
       console.log("添付直後のスクショを保存しました。");
+    }
+
+    // ★ ぴったし4時（0分）じゃない場合はここでストップする
+    if (!isExactHour) {
+      console.log(`【テスト停止】現在は ${jstMinutes}分 のため、投稿ボタンは押さずに終了します。`);
+      return;
     }
 
     // 投稿ボタンをクリック
