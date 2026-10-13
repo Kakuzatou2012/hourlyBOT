@@ -1,7 +1,10 @@
 import puppeteer from 'puppeteer';
-import fs from 'fs';
 
 (async () => {
+  const date = new Date();
+  const jstHours = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })).getHours();
+  const message = `【BOT】${jstHours}時になりました。`;
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -10,38 +13,82 @@ import fs from 'fs';
   const page = await browser.newPage();
 
   try {
-    // 1. サイトにアクセス
+    // サイトにアクセス
     await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
 
-    // 2. ログイン情報の入力
+    // ログインフォームの入力
     await page.waitForSelector('#a-handle', { timeout: 10000 });
-    await page.type('#a-handle', 'kakuzatou');
-    await page.type('#a-pass', 't20120627');
+    
+    await page.evaluate(() => {
+      const handleInput = document.getElementById('a-handle');
+      const passInput = document.getElementById('a-pass');
+      
+      handleInput.value = 'kakuzatou';
+      handleInput.dispatchEvent(new Event('input', { bubbles: true }));
+      handleInput.dispatchEvent(new Event('change', { bubbles: true }));
 
-    // 3. ログインボタンをクリック
+      passInput.value = 't20120627';
+      passInput.dispatchEvent(new Event('input', { bubbles: true }));
+      passInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    // ログインボタンのクリックとサブミット
+    const loginSuccess = await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button, input.btn, .btn');
+      let targetBtn = null;
+
+      for (let el of buttons) {
+        const text = (el.innerText || el.value || '').trim();
+        const className = el.className || '';
+        if (text === 'ログイン' && className.includes('btn') && !className.includes('tab')) {
+          targetBtn = el;
+          break;
+        }
+      }
+
+      if (targetBtn) {
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(eventType => {
+          targetBtn.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true, view: window }));
+        });
+        const form = targetBtn.closest('form');
+        if (form) {
+          form.submit();
+        }
+        return true;
+      }
+      return false;
+    });
+
+    if (!loginSuccess) {
+      throw new Error("本物のログインボタンが見つからなかった");
+    }
+
+    // 画面遷移を待つ
+    await new Promise(r => setTimeout(r, 4000));
+
+    // 投稿欄の出現を待ってメッセージを入力
+    await page.waitForSelector('#c-body', { timeout: 10000 });
+    await page.type('#c-body', message);
+
+    // 投稿ボタンをクリック
     await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
-        if (btn.textContent.includes('ログイン')) {
+        if (btn.textContent.includes('投稿')) {
           btn.click();
           break;
         }
       }
     });
 
-    // 4. 3秒待ってからスクリーンショットを撮影（現状確認用）
     await new Promise(r => setTimeout(r, 3000));
-    await page.screenshot({ path: 'login-debug.png' });
-    console.log("スクリーンショットを保存しました");
-
-    // 5. 投稿欄を探す
-    await page.waitForSelector('#c-body', { timeout: 5000 });
-    console.log("投稿欄を発見！");
+    console.log("投稿成功: " + message);
 
   } catch (error) {
     console.error("エラー発生: ", error);
-    // エラー時も今の画面をスクショに残す
+    // デバッグ用にエラー時の画面をスクショ保存
     await page.screenshot({ path: 'error-debug.png' }).catch(() => {});
+    throw error;
   } finally {
     await browser.close();
   }
