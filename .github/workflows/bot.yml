@@ -1,9 +1,8 @@
 name: Hourly Bot
 
 on:
-  schedule:
-    # 1時間ごとに実行
-    - cron: '0 * * * *'
+  # 1時間ごとに実行
+  - cron: '0 * * * *'
   workflow_dispatch: # 手動実行用
 
 jobs:
@@ -17,6 +16,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
 
       - name: Run script
         run: node bot.js
