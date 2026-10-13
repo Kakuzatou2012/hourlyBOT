@@ -6,7 +6,7 @@ import puppeteer from 'puppeteer';
   const jstHours = jstDate.getHours();
   const jstMinutes = jstDate.getMinutes();
 
-  const message = `【アナウンス】${jstHours}時になりました。`;
+  const message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
 
   console.log(`現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
