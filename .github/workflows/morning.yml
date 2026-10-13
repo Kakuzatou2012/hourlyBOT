@@ -17,6 +17,6 @@ jobs:
           
       - name: Install dependencies
         run: npm install
-
-      - name: Run morning bot
-        run: node morning.js
+        
+      - name: Run bot
+        run: node bot.js
