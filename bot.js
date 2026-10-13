@@ -91,6 +91,10 @@ import puppeteer from 'puppeteer';
         console.log("⚠️ ファイル選択要素が見つかりませんでした");
       }
       await new Promise(r => setTimeout(r, 2000));
+
+      // 添付直後のスクショ
+      await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
+      console.log("添付直後のスクショを保存しました。");
     }
 
     // 投稿ボタンをクリック
