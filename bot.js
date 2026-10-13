@@ -3,7 +3,7 @@ import puppeteer from 'puppeteer';
 (async () => {
   const date = new Date();
   const jstHours = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })).getHours();
-  const message = `【BOT】${jstHours}時になりました。`;
+  const message = `【アナウンス】${jstHours}時になりました。`;
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -47,42 +47,64 @@ import puppeteer from 'puppeteer';
 
     // 4. ログイン後の画面切り替えを待つ
     console.log("ログインボタンを押しました。画面切り替えを待ちます...");
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise(r => setTimeout(r, 6000));
 
-    // 5. ポップアップの「スキップ」などを探して閉じる
-    await page.evaluate(() => {
-      const elements = document.querySelectorAll('button, div, span, a');
-      for (let el of elements) {
-        const text = (el.innerText || '').trim();
-        if (text === 'スキップ' || text === '×' || text === '閉じる' || text === 'OK') {
-          el.click();
-          break;
+    // ★ 5. 「スキップ」ボタン（クラス: btn ghost small）をピンポイントでクリックして閉じる
+    const skipClicked = await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      for (let btn of buttons) {
+        const text = (btn.innerText || '').trim();
+        const className = btn.className || '';
+        if (text === 'スキップ' && className.includes('btn') && className.includes('ghost')) {
+          btn.click();
+          return true;
         }
       }
+      return false;
     });
-    await new Promise(r => setTimeout(r, 1000));
+
+    if (skipClicked) {
+      console.log("「スキップ」ボタンをクリックしました。");
+    } else {
+      console.log("「スキップ」ボタンが見つからなかったため、そのまま進みます。");
+    }
+    
+    await new Promise(r => setTimeout(r, 2000));
 
     // 6. 投稿欄の出現を待つ
     await page.waitForSelector('#c-body', { timeout: 10000 });
     console.log("投稿欄を発見！メッセージを入力します...");
 
     await page.type('#c-body', message, { delay: 50 });
+    await new Promise(r => setTimeout(r, 1000));
 
-    // 7. 投稿ボタンをクリック
-    await page.evaluate(() => {
+    // ★ 7. 「投稿」ボタン（テキスト「投稿」、クラス「btn」）をピンポイントでクリック
+    const postClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
-        if (btn.textContent.includes('投稿')) {
-          btn.click();
-          break;
+        const text = (btn.innerText || btn.textContent || '').trim();
+        const className = btn.className || '';
+        // ほかのボタン（「投稿する」など）と混ざらないよう、厳密に「投稿」というテキストに一致させる
+        if (text === '投稿' && className.includes('btn')) {
+          ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(eventType => {
+            btn.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true, view: window }));
+          });
+          return true;
         }
       }
+      return false;
     });
 
+    if (!postClicked) {
+      throw new Error("投稿ボタンが見つかりませんでした");
+    }
+
+    console.log("投稿ボタンをクリックしました。");
+
     // 8. 結果確認用のスクショを保存
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 4000));
     await page.screenshot({ path: 'success-result.png', fullPage: true });
-    console.log("投稿処理が完了しました。");
+    console.log("処理が完了しました。");
 
   } catch (error) {
     console.error("エラー発生: ", error);
