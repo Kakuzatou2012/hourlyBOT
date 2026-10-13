@@ -6,20 +6,9 @@ import puppeteer from 'puppeteer';
   const jstHours = jstDate.getHours();
   const jstMinutes = jstDate.getMinutes();
 
-  console.log(`現在のJST時刻: ${jstHours}時${jstMinutes}分`);
+  console.log(`【通常BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // テスト用に時間ガードは外しておくけど、ぴったし判定に使うよ
-  const isExactHour = (jstMinutes === 0);
-
-  // 朝4時モード（テスト用に固定したい場合は true にしてね）
-  let isMorningBot = (jstHours === 4);
-  let message = '';
-
-  if (isMorningBot) {
-    message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？`;
-  } else {
-    message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
-  }
+  const message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -76,29 +65,6 @@ import puppeteer from 'puppeteer';
     await page.waitForSelector('#c-body', { timeout: 10000 });
     await page.type('#c-body', message, { delay: 50 });
     await new Promise(r => setTimeout(r, 1000));
-
-    // 朝4時なら画像を添付する
-    if (isMorningBot) {
-      console.log("朝4時のため、画像を添付します...");
-      const input = await page.$('input[type="file"]');
-      if (input) {
-        await input.uploadFile('./george.jpg');
-        console.log("画像をセットしました！");
-      } else {
-        console.log("⚠️ ファイル選択要素が見つかりませんでした");
-      }
-      await new Promise(r => setTimeout(r, 2000));
-
-      // 添付直後のスクショ
-      await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
-      console.log("添付直後のスクショを保存しました。");
-    }
-
-    // ★ ぴったし4時（0分）じゃない場合はここでストップする
-    if (!isExactHour) {
-      console.log(`【テスト停止】現在は ${jstMinutes}分 のため、投稿ボタンは押さずに終了します。`);
-      return;
-    }
 
     // 投稿ボタンをクリック
     const postClicked = await page.evaluate(() => {
