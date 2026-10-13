@@ -1,10 +1,12 @@
-name: 4am BOT
+name: Hourly BOT
 
 on:
   workflow_dispatch:
+  # schedule:
+  #   - cron: '0 * * * *'
 
 jobs:
-  post:
+  run-bot:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -14,16 +16,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
+
       - name: Install dependencies
         run: npm install
-        
+
       - name: Run bot
         run: node bot.js
 
-　　　　- name: Upload debug screenshot
+      - name: Upload debug screenshot
         uses: actions/upload-artifact@v4
-        if: always() # エラーでも成功でも必ずアップロードする
+        if: always()
         with:
           name: screenshots
           path: '*.png'
