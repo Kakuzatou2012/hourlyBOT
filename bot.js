@@ -8,6 +8,12 @@ import puppeteer from 'puppeteer';
 
   console.log(`【通常BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
+  // 0分以外のときはスキップ
+  if (jstMinutes !== 0) {
+    console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
+    return;
+  }
+
   const message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
 
   const browser = await puppeteer.launch({
