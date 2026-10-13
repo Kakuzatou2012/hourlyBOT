@@ -6,16 +6,22 @@ import puppeteer from 'puppeteer';
   const jstHours = jstDate.getHours();
   const jstMinutes = jstDate.getMinutes();
 
-  const message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
-
   console.log(`現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // ⚠️ ピッタシの時間（0分）のときだけ投稿するガード
-  // ※もしGitHub Actionsのcronの遅延を考慮するなら jstMinutes <= 1 とかにしてもOK
   const isExactHour = (jstMinutes === 0);
-
   if (!isExactHour) {
-    console.log(`【ガード発動】現在は ${jstMinutes}分 のため、定刻（0分）ではないため投稿をスキップします。`);
+    console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
+    return;
+  }
+
+  // 時間によって投稿内容を切り替える
+  let message = '';
+  let isMorningBot = (jstHours === 4);
+
+  if (isMorningBot) {
+    message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？`;
+  } else {
+    message = `【全国アナウンス（BOT）】${jstHours}時になりました。`;
   }
 
   const browser = await puppeteer.launch({
@@ -26,12 +32,10 @@ import puppeteer from 'puppeteer';
   const page = await browser.newPage();
 
   try {
-    // 1. サイトにアクセス
     await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
 
-    // 2. ログイン情報の入力
+    // ログイン処理
     await page.waitForSelector('#a-handle', { timeout: 10000 });
-    
     await page.click('#a-handle');
     await page.type('#a-handle', 'kakuzatou', { delay: 50 });
 
@@ -40,7 +44,6 @@ import puppeteer from 'puppeteer';
 
     await new Promise(r => setTimeout(r, 1000));
 
-    // 3. ログインボタンをクリック
     const loginClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button, input.btn, .btn');
       for (let el of buttons) {
@@ -54,55 +57,48 @@ import puppeteer from 'puppeteer';
       return false;
     });
 
-    if (!loginClicked) {
-      throw new Error("ログインボタンが見つかりませんでした");
-    }
+    if (!loginClicked) throw new Error("ログインボタンが見つかりませんでした");
 
-    // 4. ログイン後の画面切り替えを待つ
-    console.log("ログインボタンを押しました。画面切り替えを待ちます...");
     await new Promise(r => setTimeout(r, 6000));
 
-    // 5. 「スキップ」ボタンをピンポイントでクリックして閉じる
-    const skipClicked = await page.evaluate(() => {
+    // スキップ処理
+    await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
-        const text = (btn.innerText || '').trim();
-        const className = btn.className || '';
-        if (text === 'スキップ' && className.includes('btn') && className.includes('ghost')) {
+        if ((btn.innerText || '').trim() === 'スキップ' && btn.className.includes('ghost')) {
           btn.click();
           return true;
         }
       }
       return false;
     });
-
-    if (skipClicked) {
-      console.log("「スキップ」ボタンをクリックしました。");
-    }
     
     await new Promise(r => setTimeout(r, 2000));
 
-    // 6. 投稿欄の出現を待つ
+    // メッセージ入力
     await page.waitForSelector('#c-body', { timeout: 10000 });
-    console.log("投稿欄を発見！メッセージを入力します...");
-
     await page.type('#c-body', message, { delay: 50 });
     await new Promise(r => setTimeout(r, 1000));
 
-    // 7. 定刻（0分）じゃなければここでストップ
-    if (!isExactHour) {
-      console.log("テスト実行または定刻外のため、投稿ボタンは押さずに終了します。");
-      await page.screenshot({ path: 'success-result.png', fullPage: true });
-      return;
+    // 朝4時なら画像を添付する
+    if (isMorningBot) {
+      console.log("朝4時のため、画像を添付します...");
+      const input = await page.$('input[type="file"]');
+      if (input) {
+        await input.uploadFile('./george.jpg');
+        console.log("画像をセットしました！");
+      } else {
+        console.log("⚠️ ファイル選択要素が見つかりませんでした");
+      }
+      await new Promise(r => setTimeout(r, 2000));
     }
 
-    // 8. 「投稿」ボタンをクリック（定刻のときだけ実行される）
+    // 投稿ボタンをクリック
     const postClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
         const text = (btn.innerText || btn.textContent || '').trim();
-        const className = btn.className || '';
-        if (text === '投稿' && className.includes('btn')) {
+        if (text === '投稿' && btn.className.includes('btn')) {
           ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(eventType => {
             btn.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true, view: window }));
           });
@@ -112,16 +108,11 @@ import puppeteer from 'puppeteer';
       return false;
     });
 
-    if (!postClicked) {
-      throw new Error("投稿ボタンが見つかりませんでした");
-    }
+    if (!postClicked) throw new Error("投稿ボタンが見つかりませんでした");
 
     console.log("投稿ボタンをクリックしました。");
-
-    // 9. 結果確認用のスクショを保存
     await new Promise(r => setTimeout(r, 4000));
     await page.screenshot({ path: 'success-result.png', fullPage: true });
-    console.log("処理が完了しました。");
 
   } catch (error) {
     console.error("エラー発生: ", error);
