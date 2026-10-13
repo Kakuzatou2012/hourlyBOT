@@ -16,20 +16,18 @@ import puppeteer from 'puppeteer';
     // 1. サイトにアクセス
     await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
 
-    // 2. 確実にセレクタを待ってから、Puppeteerの標準タイプ機能で入力する
+    // 2. ログイン情報の入力
     await page.waitForSelector('#a-handle', { timeout: 10000 });
     
-    // 一度フォーカスして入力
     await page.click('#a-handle');
     await page.type('#a-handle', 'kakuzatou', { delay: 50 });
 
     await page.click('#a-pass');
     await page.type('#a-pass', 't20120627', { delay: 50 });
 
-    // 3. 入力された値がちゃんと反映されているか確認用の待機
     await new Promise(r => setTimeout(r, 1000));
 
-    // 4. ログインボタンをクリック
+    // 3. ログインボタンをクリック
     const loginClicked = await page.evaluate(() => {
       const buttons = document.querySelectorAll('button, input.btn, .btn');
       for (let el of buttons) {
@@ -47,29 +45,34 @@ import puppeteer from 'puppeteer';
       throw new Error("ログインボタンが見つかりませんでした");
     }
 
-    // 5. ログイン後の画面（ホーム/投稿欄）に切り替わるのを待つ
+    // 4. ログイン後の画面切り替えを待つ
     console.log("ログインボタンを押しました。画面切り替えを待ちます...");
     await new Promise(r => setTimeout(r, 5000));
 
-    // 6. 投稿欄の出現を待つ
+    // 5. 投稿欄の出現を待つ
     await page.waitForSelector('#c-body', { timeout: 10000 });
     console.log("投稿欄を発見！メッセージを入力します...");
 
     await page.type('#c-body', message, { delay: 50 });
 
-    // 7. 投稿ボタンをクリック
-    await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button');
-      for (let btn of buttons) {
-        if (btn.textContent.includes('投稿')) {
-          btn.click();
-          break;
+    // 6. 投稿ボタンをクリック（ネットワークの通信が落ち着くまで待つオプションを追加）
+    await Promise.all([
+      page.evaluate(() => {
+        const buttons = document.querySelectorAll('button');
+        for (let btn of buttons) {
+          if (btn.textContent.includes('投稿')) {
+            btn.click();
+            break;
+          }
         }
-      }
-    });
+      }),
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {})
+    ]);
 
+    // 7. 投稿結果確認用のスクショを保存
     await new Promise(r => setTimeout(r, 3000));
-    console.log("投稿成功: " + message);
+    await page.screenshot({ path: 'success-result.png', fullPage: true });
+    console.log("投稿処理が完了しました。結果画面のスクショを保存しました。");
 
   } catch (error) {
     console.error("エラー発生: ", error);
