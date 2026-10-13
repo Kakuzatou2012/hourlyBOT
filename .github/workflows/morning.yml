@@ -1,31 +1,31 @@
-name: 4am BOT
+name: 4am Bot
 
 on:
+  schedule:
+    - cron: '0 19 * * *'
   workflow_dispatch:
-  # schedule:
-  #   - cron: '0 19 * * *'  # UTC 19時 = JST 4時
 
 jobs:
-  post:
+  run-morning-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install puppeteer
 
-      - name: Run bot
-        run: node bot.js
+      - name: Run 4am Bot
+        run: node morning.js
 
-      - name: Upload debug screenshot
-        uses: actions/upload-artifact@v4
+      - name: Upload Screenshots
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: morning-screenshots
+          name: 4am-screenshots
           path: '*.png'
