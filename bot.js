@@ -6,13 +6,15 @@ import puppeteer from 'puppeteer';
   const jstHours = jstDate.getHours();
   const jstMinutes = jstDate.getMinutes();
 
-  console.log(`【送金テストBOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
+  console.log(`【通常BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // 0〜3分以内のガード（テスト時は必要なら外してね）
+  // 0〜3分以内の遅延なら許容する
   if (jstMinutes > 3) {
-    console.log(`【ガード発動】現在は ${jstMinutes}分 のためスキップします。`);
+    console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
     return;
   }
+
+  const message = `【全国アナウンス（BOT）】\n${jstHours}時になりました。`;
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -22,10 +24,9 @@ import puppeteer from 'puppeteer';
   const page = await browser.newPage();
 
   try {
-    // 1. サイトを開く
     await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
 
-    // 2. ログイン処理
+    // ログイン処理
     await page.waitForSelector('#a-handle', { timeout: 10000 });
     await page.click('#a-handle');
     await page.type('#a-handle', 'kakuzatou', { delay: 50 });
@@ -52,7 +53,7 @@ import puppeteer from 'puppeteer';
 
     await new Promise(r => setTimeout(r, 6000));
 
-    // 3. スキップ処理
+    // スキップ処理
     await page.evaluate(() => {
       const buttons = document.querySelectorAll('button');
       for (let btn of buttons) {
@@ -64,59 +65,33 @@ import puppeteer from 'puppeteer';
       return false;
     });
     
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 2000));
 
-    // 4. 「コインを送る」ボタン（#send）を押す
-    const sendClicked = await page.evaluate(() => {
-      const sendBtn = document.getElementById('send');
-      if (sendBtn) {
-        sendBtn.click();
-        return true;
-      }
-      return false;
-    });
-
-    if (!sendClicked) throw new Error("「コインを送る」ボタンが見つかりませんでした");
-
-    await new Promise(r => setTimeout(r, 1500));
-
-    // 5. モーダル内に「zav」「1」「【BOT】送金テスト」を入力
-    await page.waitForSelector('#mf-h', { timeout: 5000 });
-
-    await page.evaluate(() => {
-      const hInput = document.getElementById('mf-h');
-      const aInput = document.getElementById('mf-a');
-      const mInput = document.getElementById('mf-m');
-
-      if (hInput) hInput.value = 'zav';
-      if (aInput) aInput.value = 1;
-      if (mInput) mInput.value = '【BOT】送金テスト';
-
-      [hInput, aInput, mInput].forEach(input => {
-        if (input) {
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      });
-    });
-
+    // メッセージ入力
+    await page.waitForSelector('#c-body', { timeout: 10000 });
+    await page.type('#c-body', message, { delay: 50 });
     await new Promise(r => setTimeout(r, 1000));
 
-    // 6. 確定ボタン（#modal-ok）を押す
-    const okClicked = await page.evaluate(() => {
-      const okBtn = document.getElementById('modal-ok');
-      if (okBtn) {
-        okBtn.click();
-        return true;
+    // 投稿ボタンをクリック
+    const postClicked = await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      for (let btn of buttons) {
+        const text = (btn.innerText || btn.textContent || '').trim();
+        if (text === '投稿' && btn.className.includes('btn')) {
+          ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(eventType => {
+            btn.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true, view: window }));
+          });
+          return true;
+        }
       }
       return false;
     });
 
-    if (!okClicked) throw new Error("送金確定ボタンが見つかりませんでした");
+    if (!postClicked) throw new Error("投稿ボタンが見つかりませんでした");
 
-    console.log("zavさんへの送金完了！");
-    await new Promise(r => setTimeout(r, 3000));
-    await page.screenshot({ path: 'transfer-success.png', fullPage: true });
+    console.log("投稿ボタンをクリックしました。");
+    await new Promise(r => setTimeout(r, 4000));
+    await page.screenshot({ path: 'success-result.png', fullPage: true });
 
   } catch (error) {
     console.error("エラー発生: ", error);
