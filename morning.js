@@ -8,6 +8,12 @@ import puppeteer from 'puppeteer';
 
   console.log(`【4am BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
+  // 本番用の時間ガード（朝4時かつ0〜3分以内以外はストップ）
+  if (jstHours !== 4 || jstMinutes > 3) {
+    console.log(`【ガード発動】現在は JST ${jstHours}:${jstMinutes} のため投稿ボタンは押さずに終了します。`);
+    return;
+  }
+
   const message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？\n#全国アナウンスBOT`;
 
   const browser = await puppeteer.launch({
@@ -23,10 +29,10 @@ import puppeteer from 'puppeteer';
     // ログイン処理
     await page.waitForSelector('#a-handle', { timeout: 10000 });
     await page.click('#a-handle');
-    await page.type('#a-handle', 'kakuzatou', { delay: 50 });
+    await page.type('#a-handle', process.env.SNS_USER, { delay: 50 });
 
     await page.click('#a-pass');
-    await page.type('#a-pass', 't20120627', { delay: 50 });
+    await page.type('#a-pass', process.env.SNS_PASS, { delay: 50 });
 
     await new Promise(r => setTimeout(r, 1000));
 
@@ -80,12 +86,6 @@ import puppeteer from 'puppeteer';
     // 添付直後のスクショを保存
     await page.screenshot({ path: 'debug-uploaded.png', fullPage: true });
     console.log("添付直後のスクショを保存しました。");
-
-    // 本番用の時間ガード（朝4時かつ0〜3分以内以外はストップ）
-    if (jstHours !== 4 || jstMinutes > 3) {
-      console.log(`【ガード発動】現在は JST ${jstHours}:${jstMinutes} のため投稿ボタンは押さずに終了します。`);
-      return;
-    }
 
     // 投稿ボタンをクリック
     const postClicked = await page.evaluate(() => {
