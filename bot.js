@@ -7,9 +7,9 @@ import puppeteer from 'puppeteer';
   const jstMinutes = jstDate.getMinutes();
 
   console.log(`【通常BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
-
-  if (jstMinutes > 3) {
-    console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
+  
+  if (jstHours === 4 || jstMinutes > 3) {
+    console.log(`【ガード発動】現在は ${jstHours}時${jstMinutes}分 のため投稿をスキップします。`);
     return;
   }
 
