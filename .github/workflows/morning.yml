@@ -21,6 +21,9 @@ jobs:
         run: npm install puppeteer
 
       - name: Run 4am Bot
+        env:
+          SNS_USER: ${{ secrets.SNS_USER }}
+          SNS_PASS: ${{ secrets.SNS_PASS }}
         run: node morning.js
 
       - name: Upload Screenshots
