@@ -1,0 +1,22 @@
+name: Typing Bot Manual
+
+on:
+  workflow_dispatch: # 手動実行のみ
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install puppeteer
+
+      - name: Run bot
+        run: node bot.js # ボットのファイル名に合わせてね
