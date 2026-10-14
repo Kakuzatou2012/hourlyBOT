@@ -8,7 +8,6 @@ import puppeteer from 'puppeteer';
 
   console.log(`【通常BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  // 0〜3分以内の遅延なら許容する
   if (jstMinutes > 3) {
     console.log(`【ガード発動】現在は ${jstMinutes}分 のため投稿をスキップします。`);
     return;
@@ -29,10 +28,10 @@ import puppeteer from 'puppeteer';
     // ログイン処理
     await page.waitForSelector('#a-handle', { timeout: 10000 });
     await page.click('#a-handle');
-    await page.type('#a-handle', 'kakuzatou', { delay: 50 });
+    await page.type('#a-handle', process.env.SNS_USER, { delay: 50 });
 
     await page.click('#a-pass');
-    await page.type('#a-pass', 't20120627', { delay: 50 });
+    await page.type('#a-pass', process.env.SNS_PASS, { delay: 50 });
 
     await new Promise(r => setTimeout(r, 1000));
 
