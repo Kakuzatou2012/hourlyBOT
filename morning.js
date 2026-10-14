@@ -8,7 +8,7 @@ import puppeteer from 'puppeteer';
 
   console.log(`【4am BOT】現在のJST時刻: ${jstHours}時${jstMinutes}分`);
 
-  const message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？`;
+  const message = `【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？\n#全国アナウンスBOT`;
 
   const browser = await puppeteer.launch({
     headless: true,
