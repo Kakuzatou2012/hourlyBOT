@@ -27,13 +27,13 @@ function getRandomKeyword() {
 
 function createPostMessage(hour, keyword, isManualEvent, coins) {
   if (isManualEvent) {
-    return `【全国アナウンス（BOT）】\n【不定期型イベント開催】\nタイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
+    return `【全国アナウンス（BOT）】\n【不定期型イベント開催】\nタイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nキーワード\n『${keyword}』\n#全国アナウンスBOT`;
   }
   if (hour === 4) {
-    return "【全国アナウンス（BOT）】\nおはようございます。\n朝4時になりました。\n#全国アナウンスBOT";
+    return "【全国アナウンス（BOT）】\nおはよう！\n朝4時に なにしてるんだい？\n#全国アナウンスBOT";
   }
   if (hour === 18) {
-    return `【全国アナウンス（BOT）】\n18時になりました。\n\n【イベント】\nデイリータイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
+    return `【全国アナウンス（BOT）】\n18時になりました。\n\n【イベント】\nタイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nキーワード\n『${keyword}』\n#全国アナウンスBOT`;
   }
   return `【全国アナウンス（BOT）】\n${hour}時になりました。\n#全国アナウンスBOT`;
 }
@@ -178,7 +178,7 @@ async function executeBotPost(retryCount = 0) {
     const customKeyword = (process.env.CUSTOM_KEYWORD || '').trim();
     const eventCoins = parseInt(process.env.CUSTOM_COINS || '25', 10) || 25;
 
-    // 【重要修正】午後6時(18時)以外は、手動にチェックを入れた（isManualEventがtrueの）時のみイベントにする
+    // 午後6時(18時)にイベントが起動するように設定
     const isScheduledEvent = (jstHour === 18);
     const isEventHour = isManualEvent || isScheduledEvent;
     const isMorningBot = (jstHour === 4) && !isManualEvent;
@@ -375,7 +375,6 @@ async function executeBotPost(retryCount = 0) {
         const remainingSec = Math.max(0, 300 - elapsedSec);
 
         try {
-          // コメントが確実に取得できるよう、毎回タイムラインを確実に再読込
           if (scanCycle % 2 === 0) {
             await page.reload({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
           } else {
@@ -394,7 +393,6 @@ async function executeBotPost(retryCount = 0) {
           await new Promise(r => setTimeout(r, 2000));
         }
 
-        // コメント抽出ロジック（あいまい検索や空白の揺れにも完全対応）
         const scanResult = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
           const articles = Array.from(document.querySelectorAll('article.post, .post'));
 
@@ -434,7 +432,6 @@ async function executeBotPost(retryCount = 0) {
             const rawId = art.dataset.id || (idEl ? idEl.innerText.replace('#', '').trim() : '');
             const postId = rawId ? parseInt(rawId, 10) : null;
 
-            // 投稿がBOTより新しい、またはDOM上で上にある場合を対象とする
             const isAbove = (botIndex !== -1 && idx < botIndex) || (basePostId && postId && postId > basePostId) || (!basePostId && idx < 5);
             const isNotMe = handle.toLowerCase() !== myBotHandle.toLowerCase() && !name.includes('シュガー') && !bodyText.includes('【全国アナウンス（BOT）】');
 
@@ -455,7 +452,7 @@ async function executeBotPost(retryCount = 0) {
                   handle,
                   name,
                   text: bodyText,
-                  postId: postId || 999999 + idx, // IDがない場合も順序を保持
+                  postId: postId || 999999 + idx,
                   index: idx
                 });
               }
@@ -496,7 +493,6 @@ async function executeBotPost(retryCount = 0) {
         console.log(`[最速1位確定] @${winner.handle} (${winner.name})`);
       }
 
-      // 送金処理の実行
       if (winner) {
         try {
           await sendCoinsToUser(page, winner.handle, eventCoins, `タイピング選手権 優勝賞金 (${eventCoins}コイン)`);
@@ -504,7 +500,6 @@ async function executeBotPost(retryCount = 0) {
           console.error("送金処理エラー:", transferErr.message);
         }
 
-        // 優勝結果の投稿
         try {
           console.log("優勝者発表メッセージを投稿中...");
           await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2" });
