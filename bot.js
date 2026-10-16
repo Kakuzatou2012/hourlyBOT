@@ -3,12 +3,12 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.0)
+ * 統合版 全国アナウンスBOT (v5.1)
  * 
  * ・手動（主導）実行時: 「何時になりました」を除外し【不定期型イベント開催】として即時開始
  * ・定期実行時（18時）: 毎日18時の定時タイピング選手権
- * ・ログイン判定: 未ログイン状態を厳密判定して確実に認証完了を待機
- * ・注目投稿除外: 「✨ 注目」ピン留め投稿を省いて最新の投稿のみを審査
+ * ・タイムライン最新化: 毎回の審査ごとにフィードを強制再取得（DOMフリーズ防止）
+ * ・BOTより上の新着コメント審査: お題投稿より上にある新しいコメントを全件スキャン＆リアルタイムログ表示
  * ・送金 ＆ 結果発表: 5分間の制限時間審査後、最速正解者へ25コイン送金と結果投稿
  */
 
@@ -33,7 +33,6 @@ function getRandomKeyword() {
 
 // 投稿メッセージ生成 (手動開催時は「何時になりました」を含めない)
 function createPostMessage(hour, keyword, isManualEvent, coins) {
-  // 手動（主導）実行時は「何時になりました」は含めず、不定期型イベントとして投稿
   if (isManualEvent) {
     return `【全国アナウンス（BOT）】\n【不定期型イベント開催】\nタイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
   }
@@ -104,10 +103,7 @@ async function executeBotPost(retryCount = 0) {
     const rawMode = (process.env.MODE || process.env.INPUT_MODE || '').trim().toLowerCase();
     const isGitHubManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
 
-    // 手動（主導）実行の判定:
-    // ・GitHub Actionsの手動実行 (workflow_dispatch)
-    // ・引数やMODEに manual, event, event_now が指定された場合
-    // ※手動実行時は「何時になりました」は出さず、不定期型イベントとして即時開催！
+    // 手動（主導）実行の判定
     const isManualEvent = 
       isGitHubManual ||
       args.includes('--manual') ||
@@ -133,9 +129,7 @@ async function executeBotPost(retryCount = 0) {
     const keyword = isEventHour ? (customKeyword || getRandomKeyword()) : null;
     const message = createPostMessage(jstHour, keyword, isManualEvent, eventCoins);
 
-    // 安全テストモード(Dry-Run)判定:
-    // ・手動不定期イベント(isManualEvent) または 強制投稿(isForcePost) が指定されている場合は【時間外でも本番投稿を実行】
-    // ・手動で dry_run が明示された場合、または (定期実行時で5分を超過している場合) に Dry-Run と判定
+    // 安全テストモード(Dry-Run)判定
     const isDryRun = isExplicitDryRun || (!isManualEvent && !isForcePost && jstMinutes > 5);
 
     console.log("==================================================");
@@ -188,7 +182,7 @@ async function executeBotPost(retryCount = 0) {
         throw new Error("環境変数 SNS_USER または SNS_PASS が空です。GitHub Secretsを確認してください。");
       }
 
-      // 「ログイン」タブを選択（新規登録タブになっている場合の安全策）
+      // 「ログイン」タブを選択
       await page.evaluate(() => {
         const loginTab = document.querySelector('button[data-mode="login"]');
         if (loginTab && !loginTab.classList.contains('active')) {
@@ -305,16 +299,13 @@ async function executeBotPost(retryCount = 0) {
       for (const art of articles) {
         if (posts.length >= 3) break;
 
-        // 【除外条件】「✨ 注目」ピン留め・目立たせる機能の投稿は除外
         const isFeatured = 
           art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
           art.querySelector('.hl-tag') !== null ||
           (art.innerHTML && art.innerHTML.includes('hl-tag')) ||
           (art.className && art.className.includes('pinned'));
 
-        if (isFeatured) {
-          continue;
-        }
+        if (isFeatured) continue;
 
         const nameEl = art.querySelector('.post-name');
         const handleEl = art.querySelector('.post-handle');
@@ -512,83 +503,151 @@ async function executeBotPost(retryCount = 0) {
       console.log("--------------------------------------------------");
 
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000;
+      const competitionDurationMs = 5 * 60 * 1000; // 5分間 (300,000ms)
       const qualifiedSubmissions = new Map();
+      let scanCycle = 0;
 
       while (Date.now() - startTime < competitionDurationMs) {
+        scanCycle++;
         const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
         const remainingSec = Math.max(0, 300 - elapsedSec);
 
-        const foundList = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
-          const results = [];
-          const articles = Array.from(document.querySelectorAll('article.post, .post'));
-          const normKey = targetKeyword.replace(/[\s\r\n\t　]/g, '').toLowerCase();
+        // 1. タイムラインの強制更新（最新投稿をSupabaseから再読込）
+        try {
+          if (scanCycle % 3 === 0) {
+            // 3回に1回はページ全体をリロードして確実に最新DOMを再取得
+            await page.reload({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+            await new Promise(r => setTimeout(r, 1500));
+          } else {
+            // SPAのviewHome関数を直接実行してフィードを即座に再取得
+            await page.evaluate(async () => {
+              if (window.SP?.views?.viewHome) {
+                await window.SP.views.viewHome();
+              } else {
+                const tab = document.querySelector('button[data-tab="all"]');
+                if (tab) tab.click();
+              }
+            });
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        } catch (refreshErr) {
+          await page.reload({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 2000));
+        }
 
-          articles.forEach((art, index) => {
+        // 2. タイムライン上でBOT投稿「より上」の投稿を走査し、キーワード審査
+        const scanResult = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
+          const articles = Array.from(document.querySelectorAll('article.post, .post'));
+
+          // まずBOT投稿がDOM上の何番目にあるかを特定
+          let botIndex = -1;
+          articles.forEach((art, idx) => {
+            const rawId = art.dataset.id || (art.querySelector('.post-id')?.innerText || '').replace('#', '').trim();
+            const pid = rawId ? parseInt(rawId, 10) : null;
+            if (basePostId && pid === basePostId) {
+              botIndex = idx;
+            } else if (botIndex === -1) {
+              const body = (art.querySelector('.post-body')?.innerText || '').trim();
+              if (body.includes('【全国アナウンス（BOT）】') && targetKeyword && body.includes(targetKeyword)) {
+                botIndex = idx;
+              }
+            }
+          });
+
+          const normKey = targetKeyword.replace(/[\s\r\n\t　]/g, '').toLowerCase();
+          const postsAbove = [];
+          const matched = [];
+
+          articles.forEach((art, idx) => {
+            // 「✨ 注目」ピン留め投稿は除外
             const isFeatured = 
               art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
               art.querySelector('.hl-tag') !== null ||
-              (art.innerHTML && art.innerHTML.includes('hl-tag'));
+              (art.innerHTML && art.innerHTML.includes('hl-tag')) ||
+              (art.className && art.className.includes('pinned'));
 
             if (isFeatured) return;
 
+            const nameEl = art.querySelector('.post-name');
+            const handleEl = art.querySelector('.post-handle');
             const bodyEl = art.querySelector('.post-body');
+            const idEl = art.querySelector('.post-id');
+
+            const name = (nameEl ? (nameEl.innerText || nameEl.textContent || '') : '').trim();
+            let handle = (handleEl ? (handleEl.innerText || handleEl.textContent || '') : '').replace(/^@/, '').trim();
             const bodyText = (bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '').trim();
-            const normBody = bodyText.replace(/[\s\r\n\t　]/g, '').toLowerCase();
+            const rawId = art.dataset.id || (idEl ? idEl.innerText.replace('#', '').trim() : '');
+            const postId = rawId ? parseInt(rawId, 10) : null;
 
-            // 「その単語が入っていれば正解」の部分一致判定
-            if (normBody.includes(normKey)) {
-              const handleEl = art.querySelector('.post-handle');
-              const nameEl = art.querySelector('.post-name');
-              const idEl = art.querySelector('.post-id');
+            // 【BOT投稿より上の判定】
+            // ① DOM上でBOT投稿より上の位置にある (botIndex !== -1 && idx < botIndex)
+            // ② 投稿番号がBOTの番号より新しい (basePostId && postId && postId > basePostId)
+            const isAbove = (botIndex !== -1 && idx < botIndex) || (basePostId && postId && postId > basePostId);
+            const isNotMe = handle.toLowerCase() !== myBotHandle.toLowerCase() && !name.includes('シュガー') && !bodyText.includes('【全国アナウンス（BOT）】');
 
-              let handle = handleEl ? (handleEl.innerText || handleEl.textContent || '') : '';
-              const name = nameEl ? (nameEl.innerText || nameEl.textContent || '') : '';
-              const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
-              const postId = rawId ? parseInt(rawId, 10) : null;
-              handle = handle.replace(/^@/, '').trim();
+            if (isAbove) {
+              const normBody = bodyText.replace(/[\s\r\n\t　]/g, '').toLowerCase();
+              const isMatch = isNotMe && normBody.includes(normKey);
 
-              const isAfterBot = (!basePostId || !postId || postId > basePostId);
-              const isNotMe = handle.toLowerCase() !== myBotHandle.toLowerCase() && !name.includes('シュガー');
+              postsAbove.push({
+                postId,
+                handle,
+                name,
+                bodySnippet: bodyText.slice(0, 35),
+                isNotMe,
+                isMatch
+              });
 
-              if (handle && isNotMe && !bodyText.includes('【全国アナウンス（BOT）】') && isAfterBot) {
-                results.push({
+              if (isMatch) {
+                matched.push({
                   handle,
                   name,
                   text: bodyText,
                   postId,
                   diff: (basePostId && postId) ? (postId - basePostId) : null,
-                  index
+                  index: idx
                 });
               }
             }
           });
-          return results;
+
+          return {
+            botIndex,
+            postsAboveCount: postsAbove.length,
+            postsAboveList: postsAbove.slice(0, 5),
+            matched
+          };
         }, keyword, myBotUser, botPostId);
 
-        for (const item of foundList) {
+        // 新規正解者を記録
+        for (const item of scanResult.matched) {
           if (!qualifiedSubmissions.has(item.handle)) {
             qualifiedSubmissions.set(item.handle, {
               ...item,
               discoveredAt: Date.now()
             });
-            const diffMsg = item.diff ? (' (BOT投稿から +' + item.diff + ' 番目のコメント)') : '';
-            console.log(`[正解検知！] @${item.handle} さん (#${item.postId || 'IDなし'}${diffMsg}): "${item.text}"`);
+            const diffMsg = item.diff ? (' (BOT投稿#' + botPostId + 'から +' + item.diff + ' 番目の投稿)') : '';
+            console.log("--------------------------------------------------");
+            console.log(`★【🎉正解検知！】@${item.handle} さん (${item.name || '名前なし'})`);
+            console.log(`  投稿番号: #${item.postId || 'IDなし'}${diffMsg}`);
+            console.log(`  コメント: "${item.text}"`);
+            console.log("--------------------------------------------------");
           }
         }
 
-        if (elapsedSec % 30 < 15) {
-          console.log(`[審査中] 残り時間: ${Math.floor(remainingSec / 60)}分${remainingSec % 60}秒 (現在 ${qualifiedSubmissions.size} 人の正解を検知)`);
+        // 毎回の審査状況をログ出力（それより上のコメントをリアルタイム表示）
+        const remMin = Math.floor(remainingSec / 60);
+        const remSec = remainingSec % 60;
+        console.log(`[審査中 (残り${remMin}分${remSec}秒)] BOT投稿より上の新着投稿: ${scanResult.postsAboveCount}件をスキャン中... (正解者: ${qualifiedSubmissions.size}名)`);
+        if (scanResult.postsAboveList.length > 0) {
+          scanResult.postsAboveList.slice(0, 3).forEach((p) => {
+            const matchLabel = p.isMatch ? ' -> ★【正解一致！】' : (p.isNotMe ? '' : ' (BOT)');
+            console.log(`   ・#${p.postId || '?'} @${p.handle}: "${p.bodySnippet}"${matchLabel}`);
+          });
         }
 
-        await new Promise(r => setTimeout(r, 15000));
-
-        // タイムラインを最新化
-        await page.evaluate(() => {
-          const links = Array.from(document.querySelectorAll('a, button'));
-          const home = links.find(l => (l.innerText || '').trim() === 'ホーム');
-          if (home) home.click();
-        });
+        // 次回スキャンまで待機
+        await new Promise(r => setTimeout(r, 10000));
       }
 
       console.log("--------------------------------------------------");
