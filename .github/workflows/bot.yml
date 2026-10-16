@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '20'
 
-      # Chromiumダウンロードをスキップして2〜3秒で高速インストール
+      # package-lock.json が無くても一瞬（2〜3秒）でインストール完了
       - name: Install dependencies (Fast)
         env:
           PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
