@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v4.7 - 非同期読み込み完全待機 ＆ 直近3名確認 ＆ 優勝者発表)
+ * 統合版 全国アナウンスBOT (v5.0 - 投稿番号#〇〇〇〇取得 ＆ キーワード部分一致 ＆ 5分後連番審査)
  */
 
 const KEYWORDS = [
@@ -217,12 +217,11 @@ async function executeBotPost(retryCount = 0) {
     console.log("[スクショ1保存] 1-login-success.png");
 
     // ========================================================
-    // 【タイムライン描画待機 ＆ 直近3名のユーザー情報取得】
+    // 【タイムライン描画待機 ＆ 投稿番号(#〇〇〇〇)つき直近投稿確認】
     // ========================================================
     console.log("==================================================");
     console.log("【タイムライン確認テスト】投稿の読み込み待機中...");
 
-    // タイムライン描画完了を最大10秒待機
     try {
       await page.waitForSelector('article.post, .post, .post-body', { timeout: 10000 });
       await new Promise(r => setTimeout(r, 2000));
@@ -248,21 +247,25 @@ async function executeBotPost(retryCount = 0) {
         const nameEl = art.querySelector('.post-name');
         const handleEl = art.querySelector('.post-handle');
         const bodyEl = art.querySelector('.post-body');
+        const idEl = art.querySelector('.post-id');
 
         const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
         const handle = handleEl ? (handleEl.innerText || handleEl.textContent || '').replace(/^@/, '').trim() : '';
         const comment = bodyEl ? (bodyEl.innerText || bodyEl.textContent || '').trim() : '';
+        const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
+        const postId = rawId ? parseInt(rawId, 10) : null;
 
         if (comment) {
           posts.push({
             handle: handle || '（ハンドルなし）',
             name: name || '（表示名なし）',
-            comment: comment
+            comment: comment,
+            postId: postId
           });
         }
       }
 
-      // フォールバック (.post-body から)
+      // フォールバック
       if (posts.length === 0) {
         const bodyEls = Array.from(document.querySelectorAll('.post-body, div.post-body'));
         for (const bodyEl of bodyEls) {
@@ -270,16 +273,19 @@ async function executeBotPost(retryCount = 0) {
           const container = bodyEl.closest('.post, article, div') || bodyEl.parentElement;
           const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
           const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
+          const idEl = container ? container.querySelector('.post-id') : null;
 
           const handle = (handleEl ? (handleEl.innerText || handleEl.textContent || '') : '').replace(/^@/, '').trim();
           const name = (nameEl ? (nameEl.innerText || nameEl.textContent || '') : '').trim();
           const text = (bodyEl.innerText || bodyEl.textContent || '').trim();
+          const rawId = idEl ? idEl.innerText.replace('#', '').trim() : '';
 
           if (text) {
             posts.push({
               handle: handle || '（ハンドルなし）',
               name: name || '（表示名なし）',
-              comment: text
+              comment: text,
+              postId: rawId ? parseInt(rawId, 10) : null
             });
           }
         }
@@ -291,15 +297,18 @@ async function executeBotPost(retryCount = 0) {
     if (recentPosts.length === 0) {
       console.log("⚠️ タイムライン上に投稿が見つかりませんでした (0件または非公開の可能性)。");
     } else {
+      const latestId = recentPosts[0]?.postId;
       recentPosts.forEach((p, idx) => {
+        const idLabel = p.postId ? ('#' + p.postId) : 'IDなし';
+        const diffLabel = (latestId && p.postId && idx > 0) ? (' (最新#' + latestId + 'から -' + (latestId - p.postId) + ' 番目の投稿)') : '';
         console.log(`--------------------------------------------------`);
-        console.log(`[直近投稿 第${idx + 1}位]`);
+        console.log(`[直近投稿 第${idx + 1}位] 投稿番号: ${idLabel}${diffLabel}`);
         console.log(`  ユーザー名: @${p.handle}`);
         console.log(`  名前:       ${p.name}`);
         console.log(`  コメント:   "${p.comment}"`);
       });
       console.log(`--------------------------------------------------`);
-      console.log(`合計 ${recentPosts.length} 件の直近ユーザー情報を正常に確認・出力しました！`);
+      console.log(`合計 ${recentPosts.length} 件の直近ユーザー情報（投稿番号#つき）を正常に出力しました！`);
     }
     console.log("==================================================");
 
@@ -386,11 +395,24 @@ async function executeBotPost(retryCount = 0) {
     await new Promise(r => setTimeout(r, 4000));
     console.log("アナウンス投稿完了！");
 
-    // 毎日18時のタイピング大会の場合：制限時間5分(300秒)で審査
+    // BOTのアナウンス投稿番号を取得（以降の投稿のみを審査対象とするため）
+    await new Promise(r => setTimeout(r, 2000));
+    const botPostId = await page.evaluate(() => {
+      const firstArt = document.querySelector('article.post');
+      if (firstArt) {
+        const idEl = firstArt.querySelector('.post-id');
+        const num = idEl ? idEl.innerText.replace('#', '').trim() : (firstArt.dataset.id || '');
+        return parseInt(num, 10) || 0;
+      }
+      return 0;
+    });
+    console.log(`[基準BOT投稿番号] #${botPostId || '自動検出'}`);
+
+    // 毎日18時のタイピング大会の場合：制限時間5分(300秒)で審査！
     if (isEventHour && keyword) {
       console.log("--------------------------------------------------");
-      console.log(`[イベント開始] 制限時間: 5分間 (お題: 『${keyword}』)`);
-      console.log("5分間かけてタイムラインの回答を記録し、終了後に最速1位を厳正審査します...");
+      console.log(`[イベント開始] 制限時間: 5分間 (お題キーワード: 『${keyword}』)`);
+      console.log(`※お題投稿(#${botPostId || '基準'})以降の投稿で、キーワードが含まれるコメントのみを審査します。`);
       console.log("--------------------------------------------------");
 
       const botHandle = (process.env.SNS_USER || '').replace(/^@/, '').trim();
@@ -403,29 +425,50 @@ async function executeBotPost(retryCount = 0) {
         const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
         const remainingSec = Math.max(0, 300 - elapsedSec);
 
-        const foundList = await page.evaluate((targetKeyword, myBotHandle) => {
+        const foundList = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
           const results = [];
-          const bodyElements = Array.from(document.querySelectorAll('.post-body, div.post-body'));
+          const articles = Array.from(document.querySelectorAll('article.post, .post'));
 
-          bodyElements.forEach((bodyEl, index) => {
-            const bodyText = (bodyEl.innerText || bodyEl.textContent || '').trim();
+          // キーワード正規化（スペース・改行を除去した小文字）
+          const normKey = targetKeyword.replace(/[\s\r\n\t]/g, '').toLowerCase();
 
-            if (bodyText.includes(targetKeyword)) {
-              const container = bodyEl.closest('.post, article, div') || bodyEl.parentElement;
-              const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
-              const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
+          articles.forEach((art, index) => {
+            const bodyEl = art.querySelector('.post-body');
+            const bodyText = (bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '').trim();
+            const normBody = bodyText.replace(/[\s\r\n\t]/g, '').toLowerCase();
+
+            // 「その単語が入ってたらいい（部分一致）」の判定
+            if (normBody.includes(normKey)) {
+              const handleEl = art.querySelector('.post-handle');
+              const nameEl = art.querySelector('.post-name');
+              const idEl = art.querySelector('.post-id');
 
               let handle = handleEl ? (handleEl.innerText || handleEl.textContent || '') : '';
               const name = nameEl ? (nameEl.innerText || nameEl.textContent || '') : '';
+              const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
+              const postId = rawId ? parseInt(rawId, 10) : null;
               handle = handle.replace(/^@/, '').trim();
 
-              if (handle && handle !== myBotHandle && !bodyText.includes('【全国アナウンス（BOT）】')) {
-                results.push({ handle, name, text: bodyText, index });
+              // 判定条件:
+              // 1. 自分のBOTではない
+              // 2. BOT自身のアナウンスではない
+              // 3. お題投稿番号より大きい（お題投稿後の新しいコメントであること）
+              const isAfterBot = (!basePostId || !postId || postId > basePostId);
+
+              if (handle && handle !== myBotHandle && !bodyText.includes('【全国アナウンス（BOT）】') && isAfterBot) {
+                results.push({
+                  handle,
+                  name,
+                  text: bodyText,
+                  postId,
+                  diff: (basePostId && postId) ? (postId - basePostId) : null,
+                  index
+                });
               }
             }
           });
           return results;
-        }, keyword, botHandle);
+        }, keyword, botHandle, botPostId);
 
         for (const item of foundList) {
           if (!qualifiedSubmissions.has(item.handle)) {
@@ -433,7 +476,8 @@ async function executeBotPost(retryCount = 0) {
               ...item,
               discoveredAt: Date.now()
             });
-            console.log(`[回答検知] @${item.handle} さんがキーワードを投稿しました (経過: ${elapsedSec}秒)`);
+            const diffMsg = item.diff ? (' (BOT投稿から +' + item.diff + ' 番目のコメント)') : '';
+            console.log(`[正解検知！] @${item.handle} さん (#${item.postId || 'IDなし'}${diffMsg}): "${item.text}"`);
           }
         }
 
@@ -451,14 +495,19 @@ async function executeBotPost(retryCount = 0) {
       }
 
       console.log("--------------------------------------------------");
-      console.log("5分の制限時間が終了しました！これより審査を行います。");
+      console.log("5分の制限時間が終了しました！これより厳正審査を行います。");
       console.log(`総回答者数: ${qualifiedSubmissions.size} 名`);
 
       let winner = null;
       if (qualifiedSubmissions.size > 0) {
-        const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => a.discoveredAt - b.discoveredAt);
+        // 投稿番号(postId)が最も小さい人（物理的に最速投稿した人）、または最も早く検知された人を1位とする
+        const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
+          if (a.postId && b.postId) return a.postId - b.postId;
+          return a.discoveredAt - b.discoveredAt;
+        });
         winner = sorted[0];
-        console.log(`[審査結果: 1位確定] 最速正解者は @${winner.handle} さんです！`);
+        const winnerDiffMsg = winner.diff ? (' (BOT投稿から +' + winner.diff + ' 番目のコメント)') : '';
+        console.log(`[審査結果: 1位確定] 最速正解者は @${winner.handle} さんです！(#${winner.postId || ''}${winnerDiffMsg})`);
       } else {
         console.log("[審査結果] 制限時間内に正解者の投稿はありませんでした。");
       }
