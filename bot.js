@@ -3,19 +3,34 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v3.6 安定ブラウザ起動 ＆ 安全テスト両対応版)
+ * 統合版 全国アナウンスBOT (完成版)
+ * - タイピング選手権（指定12単語・絵文字なし）
+ * - 最速正解者に5コイン自動送金
+ * - 朝4時限定: 画像付きおはようアナウンス (george.jpg)
+ * - 安全テストモード（時間外実行時は送信直前でスクショ保存）
  */
 
+// 指定いただいた12単語
 const KEYWORDS = [
-  "ねこじゃらし", "マスカット", "ひまわり畑", "きつねうどん", "たいやき",
-  "青空レストラン", "流星群", "メロンソーダ", "アイスコーヒー", "カスタードプリン",
-  "かき氷いちご味", "オムライス", "ホットケーキ", "桜吹雪", "シュークリーム"
+  "新幹線",
+  "自動販売機",
+  "スマートフォン",
+  "洗濯機",
+  "横断歩道",
+  "携帯電話",
+  "アイスクリーム",
+  "東京タワー",
+  "消しゴム",
+  "電子レンジ",
+  "東京スカイツリー",
+  "ファミリーレストラン"
 ];
 
 function getRandomKeyword() {
   return KEYWORDS[Math.floor(Math.random() * KEYWORDS.length)];
 }
 
+// 投稿メッセージ生成 (絵文字なし)
 function createPostMessage(hour, keyword) {
   if (hour === 4) {
     return "【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？\n#全国アナウンスBOT";
@@ -46,9 +61,9 @@ async function clickPostButton(page) {
   });
 }
 
-// 5コイン送金処理
+// 5コイン送金処理 (絵文字なし)
 async function sendCoinsToWinner(page, handle) {
-  console.log(`💰 @${handle} さんへ5コインを送金中...`);
+  console.log(`@${handle} さんへ5コインを送金中...`);
   
   // 1. 国家
   await page.evaluate(() => {
@@ -78,15 +93,16 @@ async function sendCoinsToWinner(page, handle) {
   await page.waitForSelector('#mf-a', { timeout: 10000 });
   await page.type('#mf-a', '5', { delay: 40 });
 
+  // 送金メモ (絵文字なし)
   await page.waitForSelector('#mf-m', { timeout: 10000 });
-  await page.type('#mf-m', 'タイピング選手権 優勝賞金！おめでとうございます🏆', { delay: 40 });
+  await page.type('#mf-m', 'タイピング選手権 優勝賞金 (5コイン)', { delay: 40 });
   await new Promise(r => setTimeout(r, 1000));
 
   // 5. 送る (#modal-ok)
   await page.waitForSelector('#modal-ok', { timeout: 10000 });
   await page.click('#modal-ok');
   await new Promise(r => setTimeout(r, 3000));
-  console.log(`🎉 @${handle} さんへの5コイン送金が完了しました！`);
+  console.log(`@${handle} さんへの5コイン送金が完了しました。`);
   await page.screenshot({ path: 'coin-sent-result.png', fullPage: true }).catch(() => {});
 }
 
@@ -104,18 +120,17 @@ async function executeBotPost(retryCount = 0) {
 
   if (isDryRun) {
     console.log("--------------------------------------------------");
-    console.log("🧪 【安全テストモード】が起動しました！");
+    console.log("【安全テストモード】が起動しました");
     console.log(`現在は ${jstHours}時${jstMinutes}分 のため、送信直前まで進めてスクショを撮影します。`);
     console.log("--------------------------------------------------");
   } else {
-    console.log("🚀 【本番実行モード】実際に投稿・送金を行います。");
+    console.log("【本番実行モード】実際に投稿・送金を行います。");
   }
 
   const isMorningBot = (jstHours === 4);
   const keyword = isMorningBot ? '' : getRandomKeyword();
   const message = createPostMessage(jstHours, keyword);
 
-  // クラッシュしない安定したPuppeteer公式起動設定
   const browser = await puppeteer.launch({
     headless: true,
     args: [
@@ -166,18 +181,18 @@ async function executeBotPost(retryCount = 0) {
       }
     });
 
-    // 画面遷移待機 & スキップボタン
+    // ログイン後待機 & スキップボタン
     await page.waitForFunction(() => {
       const postBox = document.querySelector('#c-body');
-      const skipBtn = Array.from(document.querySelectorAll('button')).find(
-        b => (b.innerText || '').trim() === 'スキップ' && b.className.includes('ghost')
+      const skipBtn = Array.from(document.querySelectorAll('button, a')).find(
+        b => (b.innerText || b.textContent || '').trim().includes('スキップ')
       );
       return !!postBox || !!skipBtn;
     }, { timeout: 20000 });
 
     const skipped = await page.evaluate(() => {
-      const skipBtn = Array.from(document.querySelectorAll('button')).find(
-        b => (b.innerText || '').trim() === 'スキップ' && b.className.includes('ghost')
+      const skipBtn = Array.from(document.querySelectorAll('button, a')).find(
+        b => (b.innerText || b.textContent || '').trim().includes('スキップ')
       );
       if (skipBtn) {
         skipBtn.click();
@@ -190,9 +205,8 @@ async function executeBotPost(retryCount = 0) {
       await new Promise(r => setTimeout(r, 1500));
     }
 
-    // 📸 スクショ 1: ログイン完了
+    // スクショ 1: ログイン完了
     await page.screenshot({ path: '1-login-success.png', fullPage: true });
-    console.log("📸 [スクショ1保存] 1-login-success.png");
 
     // アナウンスメッセージ入力
     console.log("3. メッセージを入力中...");
@@ -213,13 +227,12 @@ async function executeBotPost(retryCount = 0) {
       }
     }
 
-    // 📸 スクショ 2: 投稿ボタンを押す直前！
+    // スクショ 2: 投稿ボタンを押す直前
     await page.screenshot({ path: '2-post-before-submit.png', fullPage: true });
-    console.log("📸 [スクショ2保存] 2-post-before-submit.png (投稿直前)");
 
     // 【テストモード（時間外）の場合】
     if (isDryRun) {
-      console.log("⚠️ [テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
+      console.log("[テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
 
       // 国家
       await page.evaluate(() => {
@@ -237,16 +250,15 @@ async function executeBotPost(retryCount = 0) {
       });
       await new Promise(r => setTimeout(r, 2000));
 
-      // 📸 スクショ 3: 経済画面
+      // スクショ 3: 経済画面
       await page.screenshot({ path: '3-kokka-keizai.png', fullPage: true });
-      console.log("📸 [スクショ3保存] 3-kokka-keizai.png");
 
       // コインを送る (#send)
       await page.waitForSelector('#send', { timeout: 10000 });
       await page.click('#send');
       await new Promise(r => setTimeout(r, 1500));
 
-      // 送金モーダルへのテスト入力
+      // 送金モーダルへのテスト入力 (絵文字なし)
       await page.waitForSelector('#mf-h', { timeout: 10000 });
       await page.type('#mf-h', (process.env.SNS_USER || 'sample_user'), { delay: 30 });
 
@@ -254,16 +266,15 @@ async function executeBotPost(retryCount = 0) {
       await page.type('#mf-a', '5', { delay: 30 });
 
       await page.waitForSelector('#mf-m', { timeout: 10000 });
-      await page.type('#mf-m', '【テスト実行】タイピング選手権 優勝賞金5コイン（送金直前スクショ確認用）', { delay: 30 });
+      await page.type('#mf-m', 'タイピング選手権 優勝賞金5コイン(テスト)', { delay: 30 });
       await new Promise(r => setTimeout(r, 1500));
 
-      // 📸 スクショ 4: 送るボタンを押す直前！
+      // スクショ 4: 送るボタンを押す直前
       await page.screenshot({ path: '4-coin-modal-ready.png', fullPage: true });
-      console.log("📸 [スクショ4保存] 4-coin-modal-ready.png (送金直前)");
 
       console.log("==================================================");
-      console.log("🎉 【テスト大成功！】全画面の操作・入力が正常完了しました！");
-      console.log("Actionsの Artifacts (bot-screenshots) から4枚の画像を確認できます。");
+      console.log("全画面の操作・入力が正常完了しました。");
+      console.log("※テストモードのため確定ボタンは押さずに安全終了しました。");
       console.log("==================================================");
       return;
     }
@@ -272,10 +283,10 @@ async function executeBotPost(retryCount = 0) {
     console.log("アナウンスを投稿します...");
     await clickPostButton(page);
     await new Promise(r => setTimeout(r, 4000));
-    console.log("アナウンス投稿完了！");
+    console.log("アナウンス投稿完了");
 
     if (!isMorningBot) {
-      console.log(`⏳ キーワード 『${keyword}』 の投稿を待機中（最大70秒）...`);
+      console.log(`キーワード 『${keyword}』 の投稿を待機中（最大70秒）...`);
       const botHandle = (process.env.SNS_USER || '').replace(/^@/, '').trim();
       let winner = null;
       const startTime = Date.now();
@@ -307,7 +318,7 @@ async function executeBotPost(retryCount = 0) {
         }, keyword, botHandle);
 
         if (winner) {
-          console.log(`🏆 勝者を発見しました！ @${winner.handle}: "${winner.text}"`);
+          console.log(`勝者を発見しました: @${winner.handle}: "${winner.text}"`);
           break;
         }
 
@@ -326,29 +337,30 @@ async function executeBotPost(retryCount = 0) {
           await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
           await new Promise(r => setTimeout(r, 2000));
           await page.waitForSelector('#c-body', { timeout: 10000 });
-          const resultMsg = `【結果発表】\nタイピング選手権、最速正解者は\n@${winner.handle} さんでした！🏆\n賞金5コインを送金しました！\n次回もお楽しみに！\n#全国アナウンスBOT`;
+          // 結果発表メッセージ (絵文字なし)
+          const resultMsg = `【結果発表】\nタイピング選手権、最速正解者は\n@${winner.handle} さんでした！\n賞金5コインを送金しました！\n次回もお楽しみに！\n#全国アナウンスBOT`;
           await page.type('#c-body', resultMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
-          console.log("結果発表の投稿完了！");
+          console.log("結果発表の投稿完了");
           await new Promise(r => setTimeout(r, 3000));
         } catch (e) {
           console.warn("結果発表投稿で軽微なエラー:", e.message);
         }
       } else {
-        console.log("⏱️ 制限時間内にキーワードの投稿はありませんでした。");
+        console.log("制限時間内にキーワードの投稿はありませんでした。");
       }
     }
 
-    console.log("🎉 すべての処理が正常に完了しました！");
+    console.log("すべての処理が正常に完了しました。");
     await page.screenshot({ path: 'success-result.png', fullPage: true });
 
   } catch (error) {
-    console.error(`❌ エラー発生 (試行 ${retryCount + 1}): `, error.message);
+    console.error(`エラー発生 (試行 ${retryCount + 1}): `, error.message);
     await page.screenshot({ path: `error-debug-${retryCount + 1}.png`, fullPage: true }).catch(() => {});
 
     if (retryCount < maxRetries) {
-      console.log(`🔄 5秒後にリトライします (${retryCount + 1}/${maxRetries})...`);
+      console.log(`5秒後にリトライします (${retryCount + 1}/${maxRetries})...`);
       await browser.close();
       await new Promise(r => setTimeout(r, 5000));
       return executeBotPost(retryCount + 1);
