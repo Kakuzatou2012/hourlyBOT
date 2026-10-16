@@ -3,14 +3,13 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.0 - 不定期型イベント手動開催 ＆ 注目投稿✨除外 ＆ シュガーBOT特定)
+ * 統合版 全国アナウンスBOT (v5.0)
  * 
- * 1. 【ログイン処理の堅牢化】未ログイン状態を正確に検知し、認証完了（#c-body描画）を待機
- * 2. 【不定期型イベント手動開催】GitHub Actionsの手動実行(event_now)からいつでもタイピング大会を即時開催可能
- * 3. 【「✨ 注目」投稿の完全除外】目立たせる機能(#v11-pinned, .hl-tag等)の固定投稿を除外し、最新時系列のみを判定
- * 4. 【BOT投稿(シュガー)の厳密特定】投稿直後にBOT(シュガー)自身の投稿をピンポイント特定し、その投稿番号を基準IDに確定
- * 5. 【部分一致キーワード審査】空白・記号・改行を吸収し「その単語が入っていれば正解」として5分間リアルタイム審査
- * 6. 【優勝者への25コイン送金 ＆ 結果発表】最速正解者に自動送金し、「本日のイベント優勝者は〜」を自動投稿
+ * ・手動（主導）実行時: 「何時になりました」を除外し【不定期型イベント開催】として即時開始
+ * ・定期実行時（18時）: 毎日18時の定時タイピング選手権
+ * ・ログイン判定: 未ログイン状態を厳密判定して確実に認証完了を待機
+ * ・注目投稿除外: 「✨ 注目」ピン留め投稿を省いて最新の投稿のみを審査
+ * ・送金 ＆ 結果発表: 5分間の制限時間審査後、最速正解者へ25コイン送金と結果投稿
  */
 
 const KEYWORDS = [
@@ -32,10 +31,11 @@ function getRandomKeyword() {
   return KEYWORDS[Math.floor(Math.random() * KEYWORDS.length)];
 }
 
-// 投稿メッセージ生成 (絵文字なし・シンプル構成)
+// 投稿メッセージ生成 (手動開催時は「何時になりました」を含めない)
 function createPostMessage(hour, keyword, isManualEvent, coins) {
+  // 手動（主導）実行時は「何時になりました」は含めず、不定期型イベントとして投稿
   if (isManualEvent) {
-    return `【全国アナウンス（BOT）】\n【不定期イベント開催】\nデイリータイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
+    return `【全国アナウンス（BOT）】\n【不定期型イベント開催】\nタイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
   }
   if (hour === 4) {
     return "【全国アナウンス（BOT）】\nおはようございます。\n朝4時になりました。\n#全国アナウンスBOT";
@@ -102,7 +102,22 @@ async function executeBotPost(retryCount = 0) {
     // 実行引数・環境変数の読み込み
     const args = process.argv.slice(2);
     const rawMode = (process.env.MODE || process.env.INPUT_MODE || '').trim().toLowerCase();
-    const isEventNow = args.includes('--event-now') || args.includes('event') || rawMode === 'event_now' || process.env.EVENT_NOW === 'true';
+    const isGitHubManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+
+    // 手動（主導）実行の判定:
+    // ・GitHub Actionsの手動実行 (workflow_dispatch)
+    // ・引数やMODEに manual, event, event_now が指定された場合
+    // ※手動実行時は「何時になりました」は出さず、不定期型イベントとして即時開催！
+    const isManualEvent = 
+      isGitHubManual ||
+      args.includes('--manual') ||
+      args.includes('--event-now') ||
+      args.includes('event') ||
+      rawMode === 'event_now' ||
+      rawMode === 'manual' ||
+      process.env.EVENT_NOW === 'true' ||
+      process.env.MANUAL === 'true';
+
     const isForcePost = args.includes('--force') || rawMode === 'force_post' || process.env.FORCE_POST === 'true';
     const isExplicitDryRun = rawMode === 'dry_run' || process.env.DRY_RUN === 'true';
 
@@ -110,24 +125,24 @@ async function executeBotPost(retryCount = 0) {
     const customKeyword = (process.env.CUSTOM_KEYWORD || '').trim();
     const eventCoins = parseInt(process.env.CUSTOM_COINS || '25', 10) || 25;
 
-    // イベント判定: 不定期手動イベント または 毎日18時
-    const isScheduledEvent = (jstHour === 18);
-    const isEventHour = isEventNow || isScheduledEvent;
-    const isMorningBot = (jstHour === 4) && !isEventNow;
+    // イベント判定: 手動不定期イベント または 毎日18時の定期イベント
+    const isScheduledEvent = (jstHour === 18) && !isManualEvent;
+    const isEventHour = isManualEvent || isScheduledEvent;
+    const isMorningBot = (jstHour === 4) && !isManualEvent;
 
     const keyword = isEventHour ? (customKeyword || getRandomKeyword()) : null;
-    const message = createPostMessage(jstHour, keyword, isEventNow, eventCoins);
+    const message = createPostMessage(jstHour, keyword, isManualEvent, eventCoins);
 
     // 安全テストモード(Dry-Run)判定:
-    // ・不定期イベント(isEventNow) または 強制投稿(isForcePost) が指定されている場合は【時間外でも本番投稿を実行】
-    // ・手動で dry_run が選ばれた場合、または (定期実行時で5分を超過している場合) に Dry-Run と判定
-    const isDryRun = isExplicitDryRun || (!isEventNow && !isForcePost && jstMinutes > 5);
+    // ・手動不定期イベント(isManualEvent) または 強制投稿(isForcePost) が指定されている場合は【時間外でも本番投稿を実行】
+    // ・手動で dry_run が明示された場合、または (定期実行時で5分を超過している場合) に Dry-Run と判定
+    const isDryRun = isExplicitDryRun || (!isManualEvent && !isForcePost && jstMinutes > 5);
 
     console.log("==================================================");
     console.log(`[BOT実行開始] JST時刻: ${jstHour}時${jstMinutes}分 (試行: ${retryCount + 1})`);
-    if (isEventNow) {
+    if (isManualEvent) {
       console.log("★【不定期型イベント手動開催モード】");
-      console.log(`   時間に関係なく、今すぐタイピング選手権を開催します (賞金: ${eventCoins}コイン / お題: 『${keyword}』)`);
+      console.log(`   「何時になりました」を除外し、不定期型イベントとして即時開催します (賞金: ${eventCoins}コイン / お題: 『${keyword}』)`);
     } else if (isDryRun) {
       console.log("--------------------------------------------------");
       console.log("[安全テストモード (Dry Run)]");
@@ -135,9 +150,9 @@ async function executeBotPost(retryCount = 0) {
       console.log("タイムライン解析 ＆ 全画面スクリーンショットを撮影して検証します。");
       console.log("--------------------------------------------------");
     } else {
-      console.log(`[本番実行モード] 定時実行 (現在: ${jstMinutes}分 / 5分以内) として処理を開始します。`);
+      console.log(`[本番実行モード] 定時自動実行 (現在: ${jstMinutes}分 / 5分以内) として処理を開始します。`);
       if (isEventHour) {
-        console.log(`★ 毎日18時: タイピング選手権 (賞金${eventCoins}コイン / 制限時間5分審査) が開催されます！`);
+        console.log(`★ 毎日18時: 定期タイピング選手権 (賞金${eventCoins}コイン / 制限時間5分審査) が開催されます！`);
       }
     }
     console.log("==================================================");
@@ -261,7 +276,7 @@ async function executeBotPost(retryCount = 0) {
     console.log("[スクショ1保存] 1-login-success.png");
 
     // ========================================================
-    // 【ユーザー要望】タイムラインから「✨ 注目」を除外して直近1〜3件を出力
+    // 【タイムライン確認】「✨ 注目」を除外して直近1〜3件を出力
     // ========================================================
     console.log("==================================================");
     console.log("【タイムライン確認テスト】投稿の読み込み待機中...");
@@ -298,7 +313,7 @@ async function executeBotPost(retryCount = 0) {
           (art.className && art.className.includes('pinned'));
 
         if (isFeatured) {
-          continue; // 注目投稿はスキップ
+          continue;
         }
 
         const nameEl = art.querySelector('.post-name');
@@ -368,7 +383,6 @@ async function executeBotPost(retryCount = 0) {
 
     // ========================================================
     // 【A. 安全テストモードの場合（遅延5分超過 または 手動dry_run時）】
-    // 投稿ボタンは押さず、送金画面の検証に進む
     // ========================================================
     if (isDryRun) {
       console.log("[テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
@@ -394,7 +408,6 @@ async function executeBotPost(retryCount = 0) {
       await page.click('#send');
       await new Promise(r => setTimeout(r, 1500));
 
-      // 直近1人目のユーザーがいればそのユーザー名、いなければログインユーザー
       const testRecipient = (recentPosts[0] && recentPosts[0].handle && recentPosts[0].handle !== '（ハンドルなし）')
         ? recentPosts[0].handle
         : (process.env.SNS_USER || 'sample_user');
@@ -403,7 +416,7 @@ async function executeBotPost(retryCount = 0) {
       await page.type('#mf-h', testRecipient, { delay: 30 });
 
       await page.waitForSelector('#mf-a', { timeout: 10000 });
-      await page.type('#mf-a', String(eventCoins), { delay: 30 }); // 25コイン
+      await page.type('#mf-a', String(eventCoins), { delay: 30 });
 
       await page.waitForSelector('#mf-m', { timeout: 10000 });
       await page.type('#mf-m', `タイピング選手権 優勝賞金 (${eventCoins}コイン)`, { delay: 30 });
@@ -417,7 +430,8 @@ async function executeBotPost(retryCount = 0) {
       console.log(`送金先テスト相手: @${testRecipient} (金額: ${eventCoins}コイン)`);
       console.log("--------------------------------------------------");
       console.log("[5分後に投稿される優勝者メッセージの見本]:");
-      console.log(`【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${testRecipient} さんでした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金${eventCoins}コインを送金しました。\n次回のイベントもお楽しみに！\n#全国アナウンスBOT`);
+      const sampleWinnerTitle = isManualEvent ? "【不定期型イベント結果発表】\n優勝者は" : "本日のイベント優勝者は";
+      console.log(`【全国アナウンス（BOT）】\n${sampleWinnerTitle}\n@${testRecipient} さんでした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金${eventCoins}コインを送金しました。\n次回のイベントもお楽しみに！\n#全国アナウンスBOT`);
       console.log("--------------------------------------------------");
       console.log("Actionsのログにて直近1〜3位の投稿内容と、Artifactsの4枚の画像を確認できます。");
       console.log("==================================================");
@@ -425,15 +439,14 @@ async function executeBotPost(retryCount = 0) {
     }
 
     // ========================================================
-    // 【B. 本番モードの場合（毎時0〜5分以内 または 不定期イベント手動開催時）】
-    // 実際に投稿を行う
+    // 【B. 本番モードの場合（手動不定期イベント または 毎時0〜5分以内）】
     // ========================================================
     console.log("アナウンスを投稿します...");
     await clickPostButton(page);
     console.log("アナウンス投稿完了！タイムラインの反映を待機中...");
     await new Promise(r => setTimeout(r, 3500));
 
-    // 【重要】BOT（シュガー）自身が投稿した要素をピンポイントで特定し、基準投稿番号(botPostId)を確定する
+    // BOT（シュガー）自身が投稿した要素をピンポイントで特定し、基準投稿番号(botPostId)を確定
     const myBotUser = (process.env.SNS_USER || '').replace(/^@/, '').trim().toLowerCase();
     let botPostInfo = null;
 
@@ -441,7 +454,6 @@ async function executeBotPost(retryCount = 0) {
       botPostInfo = await page.evaluate((botUser, targetKeyword) => {
         const articles = Array.from(document.querySelectorAll('article.post, .post'));
         for (const art of articles) {
-          // 「✨ 注目」投稿は除外
           const isFeatured = 
             art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
             art.querySelector('.hl-tag') !== null ||
@@ -460,7 +472,6 @@ async function executeBotPost(retryCount = 0) {
           const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
           const postId = rawId ? parseInt(rawId, 10) : null;
 
-          // シュガー（自分）の投稿、または本文にお題・BOT署名が含まれる投稿を特定
           const isSugar = name.includes('シュガー') || (botUser && handle.toLowerCase() === botUser);
           const isBotPost = body.includes('【全国アナウンス（BOT）】') || (targetKeyword && body.includes(targetKeyword));
 
@@ -501,7 +512,7 @@ async function executeBotPost(retryCount = 0) {
       console.log("--------------------------------------------------");
 
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000; // 5分間 (300,000ms)
+      const competitionDurationMs = 5 * 60 * 1000;
       const qualifiedSubmissions = new Map();
 
       while (Date.now() - startTime < competitionDurationMs) {
@@ -511,12 +522,9 @@ async function executeBotPost(retryCount = 0) {
         const foundList = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
           const results = [];
           const articles = Array.from(document.querySelectorAll('article.post, .post'));
-
-          // キーワード正規化（スペース・改行を除去した小文字）
           const normKey = targetKeyword.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
           articles.forEach((art, index) => {
-            // 「✨ 注目」ピン留め投稿は除外
             const isFeatured = 
               art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
               art.querySelector('.hl-tag') !== null ||
@@ -528,7 +536,7 @@ async function executeBotPost(retryCount = 0) {
             const bodyText = (bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '').trim();
             const normBody = bodyText.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
-            // 「その単語が入ってたらいい（部分一致）」の判定
+            // 「その単語が入っていれば正解」の部分一致判定
             if (normBody.includes(normKey)) {
               const handleEl = art.querySelector('.post-handle');
               const nameEl = art.querySelector('.post-name');
@@ -540,10 +548,6 @@ async function executeBotPost(retryCount = 0) {
               const postId = rawId ? parseInt(rawId, 10) : null;
               handle = handle.replace(/^@/, '').trim();
 
-              // 判定条件:
-              // 1. 自分のBOT(シュガー)ではない
-              // 2. BOT自身のアナウンス本文ではない
-              // 3. お題投稿番号より大きい（お題投稿後の新しいコメントであること）
               const isAfterBot = (!basePostId || !postId || postId > basePostId);
               const isNotMe = handle.toLowerCase() !== myBotHandle.toLowerCase() && !name.includes('シュガー');
 
@@ -593,7 +597,7 @@ async function executeBotPost(retryCount = 0) {
 
       let winner = null;
       if (qualifiedSubmissions.size > 0) {
-        // 投稿番号(postId)が最も小さい人（物理的に最速で投稿した人）を1位と判定
+        // 投稿番号(postId)が最も小さいユーザーを最速1位と判定
         const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
           if (a.postId && b.postId) return a.postId - b.postId;
           return a.discoveredAt - b.discoveredAt;
@@ -636,7 +640,7 @@ async function executeBotPost(retryCount = 0) {
           await page.type('#mf-m', `タイピング選手権 優勝賞金 (${eventCoins}コイン)`, { delay: 30 });
           await new Promise(r => setTimeout(r, 1500));
 
-          // 実際の送金確定ボタンをクリック
+          // 送金確定ボタンをクリック
           await page.evaluate(() => {
             const submitBtns = Array.from(document.querySelectorAll('button'));
             const sBtn = submitBtns.find(b => (b.innerText || '').includes('送金') || (b.innerText || '').includes('送信'));
@@ -655,7 +659,8 @@ async function executeBotPost(retryCount = 0) {
           await new Promise(r => setTimeout(r, 2000));
 
           const winnerDisplayName = winner.name ? (' (' + winner.name + ')') : '';
-          const resultMsg = `【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金${eventCoins}コインを送金しました。\n次回のイベントもお楽しみに！\n#全国アナウンスBOT`;
+          const winnerTitle = isManualEvent ? "【不定期型イベント結果発表】\n優勝者は" : "本日のイベント優勝者は";
+          const resultMsg = `【全国アナウンス（BOT）】\n${winnerTitle}\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金${eventCoins}コインを送金しました。\n次回のイベントもお楽しみに！\n#全国アナウンスBOT`;
 
           await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', resultMsg, { delay: 30 });
@@ -673,7 +678,9 @@ async function executeBotPost(retryCount = 0) {
           await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2" });
           await new Promise(r => setTimeout(r, 2000));
 
-          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
+          const noWinnerMsg = isManualEvent
+            ? "【全国アナウンス（BOT）】\n【不定期型イベント終了】\nタイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT"
+            : "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
           await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', noWinnerMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
