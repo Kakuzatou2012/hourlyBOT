@@ -3,7 +3,14 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.1 - ログインセレクタ最適化 ＆ 注目除外 ＆ 不定期手動イベント)
+ * 統合版 全国アナウンスBOT (v5.0 - 不定期型イベント手動開催 ＆ 注目投稿✨除外 ＆ シュガーBOT特定)
+ * 
+ * 1. 【ログイン処理の堅牢化】未ログイン状態を正確に検知し、認証完了（#c-body描画）を待機
+ * 2. 【不定期型イベント手動開催】GitHub Actionsの手動実行(event_now)からいつでもタイピング大会を即時開催可能
+ * 3. 【「✨ 注目」投稿の完全除外】目立たせる機能(#v11-pinned, .hl-tag等)の固定投稿を除外し、最新時系列のみを判定
+ * 4. 【BOT投稿(シュガー)の厳密特定】投稿直後にBOT(シュガー)自身の投稿をピンポイント特定し、その投稿番号を基準IDに確定
+ * 5. 【部分一致キーワード審査】空白・記号・改行を吸収し「その単語が入っていれば正解」として5分間リアルタイム審査
+ * 6. 【優勝者への25コイン送金 ＆ 結果発表】最速正解者に自動送金し、「本日のイベント優勝者は〜」を自動投稿
  */
 
 const KEYWORDS = [
@@ -111,7 +118,9 @@ async function executeBotPost(retryCount = 0) {
     const keyword = isEventHour ? (customKeyword || getRandomKeyword()) : null;
     const message = createPostMessage(jstHour, keyword, isEventNow, eventCoins);
 
-    // 安全テストモード(Dry-Run)判定
+    // 安全テストモード(Dry-Run)判定:
+    // ・不定期イベント(isEventNow) または 強制投稿(isForcePost) が指定されている場合は【時間外でも本番投稿を実行】
+    // ・手動で dry_run が選ばれた場合、または (定期実行時で5分を超過している場合) に Dry-Run と判定
     const isDryRun = isExplicitDryRun || (!isEventNow && !isForcePost && jstMinutes > 5);
 
     console.log("==================================================");
@@ -140,43 +149,104 @@ async function executeBotPost(retryCount = 0) {
     // 2. ログイン状態確認・ログイン処理
     console.log("2. ログイン状態を確認中...");
 
-    // ログイン入力欄 または タイムライン(#c-body, #feed)の描画を待機
+    // ログイン入力欄(#a-handle) または タイムライン投稿欄(#c-body)の描画を待機
     await page.waitForFunction(() => {
-      return document.querySelector('#a-handle, #auth-u, input[type="password"]') ||
-             document.querySelector('#c-body, article.post, #feed, #logout');
-    }, { timeout: 25000 });
+      return !!document.querySelector('#a-handle') || !!document.querySelector('#c-body');
+    }, { timeout: 35000 });
 
-    // 既にログイン済み（セッション有効）か判定
-    const alreadyLoggedIn = await page.evaluate(() => {
-      return !!document.querySelector('#c-body, #feed, #logout, a[href="#/logout"]');
+    // 投稿入力欄(#c-body)がまだ無ければ、必ずログインを実行
+    const needLogin = await page.evaluate(() => {
+      const hasComposer = !!document.querySelector('#c-body');
+      const hasLoginForm = !!document.querySelector('#a-handle');
+      return !hasComposer || hasLoginForm;
     });
 
-    if (alreadyLoggedIn) {
-      console.log("✓ 既にログイン済み（セッション有効）です。ログイン処理をスキップします。");
-    } else {
-      console.log("ログイン情報を入力中...");
-      // ユーザー名入力欄（#a-handle または #auth-u）
-      const handleInput = await page.waitForSelector('#a-handle, #auth-u, input[autocomplete="username"]', { timeout: 10000 });
-      await handleInput.type(process.env.SNS_USER, { delay: 30 });
+    if (needLogin) {
+      console.log("未ログイン状態です。ログイン処理を開始します...");
 
-      // パスワード入力欄（#a-pass または #auth-p）
-      const passInput = await page.waitForSelector('#a-pass, #auth-p, input[type="password"]', { timeout: 10000 });
-      await passInput.type(process.env.SNS_PASS, { delay: 30 });
+      const rawUser = process.env.SNS_USER || '';
+      const rawPass = process.env.SNS_PASS || '';
+      const cleanUser = rawUser.replace(/^@/, '').trim();
+      const cleanPass = rawPass.replace(/[\r\n]+$/, '');
 
-      // ログインボタンのクリック
+      if (!cleanUser || !cleanPass) {
+        throw new Error("環境変数 SNS_USER または SNS_PASS が空です。GitHub Secretsを確認してください。");
+      }
+
+      // 「ログイン」タブを選択（新規登録タブになっている場合の安全策）
       await page.evaluate(() => {
-        const btn = document.querySelector('#auth-form button[type="submit"], #btn-login, button.btn');
-        if (btn) {
-          btn.click();
-        } else {
-          const form = document.querySelector('#auth-form, form');
-          if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const loginTab = document.querySelector('button[data-mode="login"]');
+        if (loginTab && !loginTab.classList.contains('active')) {
+          loginTab.click();
         }
       });
 
-      // ログイン完了を待機
-      await page.waitForSelector('#c-body, #feed, article.post', { timeout: 20000 }).catch(() => {});
+      // ユーザー名入力欄の待機・クリア・入力
+      console.log(`アカウント (@${cleanUser}) の認証情報を入力中...`);
+      await page.waitForSelector('#a-handle', { timeout: 15000 });
+      await page.click('#a-handle', { clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await page.type('#a-handle', cleanUser, { delay: 35 });
+
+      // パスワード入力欄の待機・クリア・入力
+      await page.waitForSelector('#a-pass', { timeout: 15000 });
+      await page.click('#a-pass', { clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await page.type('#a-pass', cleanPass, { delay: 35 });
+
+      // 万一の入力抜けを防ぐDOM補強
+      await page.evaluate((u, p) => {
+        const h = document.querySelector('#a-handle');
+        const pwd = document.querySelector('#a-pass');
+        if (h && (!h.value || h.value.trim() !== u)) {
+          h.value = u;
+          h.dispatchEvent(new Event('input', { bubbles: true }));
+          h.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        if (pwd && (!pwd.value || pwd.value !== p)) {
+          pwd.value = p;
+          pwd.dispatchEvent(new Event('input', { bubbles: true }));
+          pwd.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, cleanUser, cleanPass);
+
+      // ログイン送信ボタンを押下
+      console.log("ログインボタンを押下中...");
+      await page.evaluate(() => {
+        const btn = document.querySelector('#auth-form button[type="submit"]') || document.querySelector('#auth-form .btn');
+        if (btn) {
+          btn.click();
+        } else {
+          const form = document.querySelector('#auth-form');
+          if (form) form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      });
+
+      // 認証完了（投稿欄 #c-body が出現するか、またはエラー表示 #a-err に文字が入るか）を待機
+      console.log("認証完了を待機中 (Supabaseレスポンス)...");
+      await page.waitForFunction(() => {
+        const composer = !!document.querySelector('#c-body');
+        const errEl = document.querySelector('#a-err');
+        const hasErr = errEl && (errEl.textContent || '').trim().length > 0;
+        return composer || hasErr;
+      }, { timeout: 35000 });
+
+      // エラーメッセージの有無を確認
+      const authError = await page.evaluate(() => {
+        const errEl = document.querySelector('#a-err');
+        return errEl ? (errEl.textContent || '').trim() : '';
+      });
+
+      if (authError) {
+        throw new Error(`ログインエラー（サイト返答: "${authError}"）- Secretsの SNS_USER / SNS_PASS をご確認ください`);
+      }
+
+      // タイムライン投稿欄の描画を確実に待機
+      await page.waitForSelector('#c-body', { timeout: 15000 });
+      console.log(`✓ アカウント (@${cleanUser}) でログインに成功しました！`);
       await new Promise(r => setTimeout(r, 2000));
+    } else {
+      console.log("✓ 既にログイン済み（セッション有効）です。ログイン処理をスキップします。");
     }
 
     // ログイン後ダイアログ等のスキップ
@@ -191,7 +261,7 @@ async function executeBotPost(retryCount = 0) {
     console.log("[スクショ1保存] 1-login-success.png");
 
     // ========================================================
-    // 【タイムライン確認テスト】「✨ 注目」を除外して直近1〜3件を出力
+    // 【ユーザー要望】タイムラインから「✨ 注目」を除外して直近1〜3件を出力
     // ========================================================
     console.log("==================================================");
     console.log("【タイムライン確認テスト】投稿の読み込み待機中...");
@@ -212,7 +282,7 @@ async function executeBotPost(retryCount = 0) {
     });
     console.log(`[DOM状況] 発見した投稿要素: ${debugStats.articles}件 (本文: ${debugStats.bodies}件)`);
 
-    // 「✨ 注目」ピン留め投稿を除外して最新3件を取得
+    // 「✨ 注目」機能のピン留め投稿を厳密に除外して最新3件を抽出
     const recentPosts = await page.evaluate(() => {
       const posts = [];
       const articles = Array.from(document.querySelectorAll('article.post, .post'));
@@ -220,14 +290,16 @@ async function executeBotPost(retryCount = 0) {
       for (const art of articles) {
         if (posts.length >= 3) break;
 
-        // 【注目投稿の除外】
+        // 【除外条件】「✨ 注目」ピン留め・目立たせる機能の投稿は除外
         const isFeatured = 
           art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
           art.querySelector('.hl-tag') !== null ||
           (art.innerHTML && art.innerHTML.includes('hl-tag')) ||
           (art.className && art.className.includes('pinned'));
 
-        if (isFeatured) continue;
+        if (isFeatured) {
+          continue; // 注目投稿はスキップ
+        }
 
         const nameEl = art.querySelector('.post-name');
         const handleEl = art.querySelector('.post-handle');
@@ -249,6 +321,7 @@ async function executeBotPost(retryCount = 0) {
           });
         }
       }
+
       return posts;
     });
 
@@ -270,7 +343,7 @@ async function executeBotPost(retryCount = 0) {
     }
     console.log("==================================================");
 
-    // 3. メッセージ入力
+    // 3. アナウンスメッセージ入力
     console.log("3. メッセージを入力中...");
     await page.waitForSelector('#c-body', { timeout: 15000 });
     await page.type('#c-body', message, { delay: 30 });
@@ -294,7 +367,8 @@ async function executeBotPost(retryCount = 0) {
     console.log("[スクショ2保存] 2-post-before-submit.png (投稿直前)");
 
     // ========================================================
-    // 【A. 安全テストモードの場合】
+    // 【A. 安全テストモードの場合（遅延5分超過 または 手動dry_run時）】
+    // 投稿ボタンは押さず、送金画面の検証に進む
     // ========================================================
     if (isDryRun) {
       console.log("[テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
@@ -320,6 +394,7 @@ async function executeBotPost(retryCount = 0) {
       await page.click('#send');
       await new Promise(r => setTimeout(r, 1500));
 
+      // 直近1人目のユーザーがいればそのユーザー名、いなければログインユーザー
       const testRecipient = (recentPosts[0] && recentPosts[0].handle && recentPosts[0].handle !== '（ハンドルなし）')
         ? recentPosts[0].handle
         : (process.env.SNS_USER || 'sample_user');
@@ -328,7 +403,7 @@ async function executeBotPost(retryCount = 0) {
       await page.type('#mf-h', testRecipient, { delay: 30 });
 
       await page.waitForSelector('#mf-a', { timeout: 10000 });
-      await page.type('#mf-a', String(eventCoins), { delay: 30 });
+      await page.type('#mf-a', String(eventCoins), { delay: 30 }); // 25コイン
 
       await page.waitForSelector('#mf-m', { timeout: 10000 });
       await page.type('#mf-m', `タイピング選手権 優勝賞金 (${eventCoins}コイン)`, { delay: 30 });
@@ -350,14 +425,15 @@ async function executeBotPost(retryCount = 0) {
     }
 
     // ========================================================
-    // 【B. 本番モードの場合（不定期イベント開催時 または 定時）】
+    // 【B. 本番モードの場合（毎時0〜5分以内 または 不定期イベント手動開催時）】
+    // 実際に投稿を行う
     // ========================================================
     console.log("アナウンスを投稿します...");
     await clickPostButton(page);
     console.log("アナウンス投稿完了！タイムラインの反映を待機中...");
     await new Promise(r => setTimeout(r, 3500));
 
-    // BOT（シュガー）自身の投稿をピンポイント特定
+    // 【重要】BOT（シュガー）自身が投稿した要素をピンポイントで特定し、基準投稿番号(botPostId)を確定する
     const myBotUser = (process.env.SNS_USER || '').replace(/^@/, '').trim().toLowerCase();
     let botPostInfo = null;
 
@@ -365,6 +441,7 @@ async function executeBotPost(retryCount = 0) {
       botPostInfo = await page.evaluate((botUser, targetKeyword) => {
         const articles = Array.from(document.querySelectorAll('article.post, .post'));
         for (const art of articles) {
+          // 「✨ 注目」投稿は除外
           const isFeatured = 
             art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
             art.querySelector('.hl-tag') !== null ||
@@ -383,6 +460,7 @@ async function executeBotPost(retryCount = 0) {
           const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
           const postId = rawId ? parseInt(rawId, 10) : null;
 
+          // シュガー（自分）の投稿、または本文にお題・BOT署名が含まれる投稿を特定
           const isSugar = name.includes('シュガー') || (botUser && handle.toLowerCase() === botUser);
           const isBotPost = body.includes('【全国アナウンス（BOT）】') || (targetKeyword && body.includes(targetKeyword));
 
@@ -423,7 +501,7 @@ async function executeBotPost(retryCount = 0) {
       console.log("--------------------------------------------------");
 
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000;
+      const competitionDurationMs = 5 * 60 * 1000; // 5分間 (300,000ms)
       const qualifiedSubmissions = new Map();
 
       while (Date.now() - startTime < competitionDurationMs) {
@@ -433,9 +511,12 @@ async function executeBotPost(retryCount = 0) {
         const foundList = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
           const results = [];
           const articles = Array.from(document.querySelectorAll('article.post, .post'));
+
+          // キーワード正規化（スペース・改行を除去した小文字）
           const normKey = targetKeyword.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
           articles.forEach((art, index) => {
+            // 「✨ 注目」ピン留め投稿は除外
             const isFeatured = 
               art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
               art.querySelector('.hl-tag') !== null ||
@@ -447,6 +528,7 @@ async function executeBotPost(retryCount = 0) {
             const bodyText = (bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '').trim();
             const normBody = bodyText.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
+            // 「その単語が入ってたらいい（部分一致）」の判定
             if (normBody.includes(normKey)) {
               const handleEl = art.querySelector('.post-handle');
               const nameEl = art.querySelector('.post-name');
@@ -458,6 +540,10 @@ async function executeBotPost(retryCount = 0) {
               const postId = rawId ? parseInt(rawId, 10) : null;
               handle = handle.replace(/^@/, '').trim();
 
+              // 判定条件:
+              // 1. 自分のBOT(シュガー)ではない
+              // 2. BOT自身のアナウンス本文ではない
+              // 3. お題投稿番号より大きい（お題投稿後の新しいコメントであること）
               const isAfterBot = (!basePostId || !postId || postId > basePostId);
               const isNotMe = handle.toLowerCase() !== myBotHandle.toLowerCase() && !name.includes('シュガー');
 
@@ -493,6 +579,7 @@ async function executeBotPost(retryCount = 0) {
 
         await new Promise(r => setTimeout(r, 15000));
 
+        // タイムラインを最新化
         await page.evaluate(() => {
           const links = Array.from(document.querySelectorAll('a, button'));
           const home = links.find(l => (l.innerText || '').trim() === 'ホーム');
@@ -506,6 +593,7 @@ async function executeBotPost(retryCount = 0) {
 
       let winner = null;
       if (qualifiedSubmissions.size > 0) {
+        // 投稿番号(postId)が最も小さい人（物理的に最速で投稿した人）を1位と判定
         const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
           if (a.postId && b.postId) return a.postId - b.postId;
           return a.discoveredAt - b.discoveredAt;
@@ -548,6 +636,7 @@ async function executeBotPost(retryCount = 0) {
           await page.type('#mf-m', `タイピング選手権 優勝賞金 (${eventCoins}コイン)`, { delay: 30 });
           await new Promise(r => setTimeout(r, 1500));
 
+          // 実際の送金確定ボタンをクリック
           await page.evaluate(() => {
             const submitBtns = Array.from(document.querySelectorAll('button'));
             const sBtn = submitBtns.find(b => (b.innerText || '').includes('送金') || (b.innerText || '').includes('送信'));
@@ -578,12 +667,13 @@ async function executeBotPost(retryCount = 0) {
           console.error("優勝発表メッセージ投稿中にエラー:", announceErr.message);
         }
       } else {
+        // 正解者なしの場合の投稿
         try {
           console.log("正解者なしメッセージを投稿中...");
           await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2" });
           await new Promise(r => setTimeout(r, 2000));
 
-          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\\n制限時間5分以内に正解者はいませんでした。\\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
+          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
           await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', noWinnerMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
