@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.0 - 不定期型イベント手動開催 ＆ 注目投稿✨除外 ＆ シュガーBOT特定)
+ * 統合版 全国アナウンスBOT (v5.1 - ログインセレクタ最適化 ＆ 注目除外 ＆ 不定期手動イベント)
  */
 
 const KEYWORDS = [
@@ -65,21 +65,24 @@ async function clickPostButton(page) {
 
 async function executeBotPost(retryCount = 0) {
   const maxRetries = 2;
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process'
-    ]
-  });
+  let browser = null;
+  let page = null;
 
   try {
-    const page = await browser.newPage();
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process'
+      ]
+    });
+
+    page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
 
     // JST日時の算出
@@ -134,21 +137,52 @@ async function executeBotPost(retryCount = 0) {
     console.log("1. SNSへアクセス中...");
     await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2", timeout: 45000 });
 
-    // 2. ログイン処理
-    console.log("2. ログイン情報を入力中...");
-    await page.waitForSelector('#auth-u', { timeout: 15000 });
-    await page.type('#auth-u', process.env.SNS_USER, { delay: 30 });
-    await page.type('#auth-p', process.env.SNS_PASS, { delay: 30 });
+    // 2. ログイン状態確認・ログイン処理
+    console.log("2. ログイン状態を確認中...");
 
-    const btnSelector = '#btn-login';
-    await page.waitForSelector(btnSelector);
-    await page.click(btnSelector);
+    // ログイン入力欄 または タイムライン(#c-body, #feed)の描画を待機
+    await page.waitForFunction(() => {
+      return document.querySelector('#a-handle, #auth-u, input[type="password"]') ||
+             document.querySelector('#c-body, article.post, #feed, #logout');
+    }, { timeout: 25000 });
 
-    // ログイン後スキップ
-    await new Promise(r => setTimeout(r, 3000));
+    // 既にログイン済み（セッション有効）か判定
+    const alreadyLoggedIn = await page.evaluate(() => {
+      return !!document.querySelector('#c-body, #feed, #logout, a[href="#/logout"]');
+    });
+
+    if (alreadyLoggedIn) {
+      console.log("✓ 既にログイン済み（セッション有効）です。ログイン処理をスキップします。");
+    } else {
+      console.log("ログイン情報を入力中...");
+      // ユーザー名入力欄（#a-handle または #auth-u）
+      const handleInput = await page.waitForSelector('#a-handle, #auth-u, input[autocomplete="username"]', { timeout: 10000 });
+      await handleInput.type(process.env.SNS_USER, { delay: 30 });
+
+      // パスワード入力欄（#a-pass または #auth-p）
+      const passInput = await page.waitForSelector('#a-pass, #auth-p, input[type="password"]', { timeout: 10000 });
+      await passInput.type(process.env.SNS_PASS, { delay: 30 });
+
+      // ログインボタンのクリック
+      await page.evaluate(() => {
+        const btn = document.querySelector('#auth-form button[type="submit"], #btn-login, button.btn');
+        if (btn) {
+          btn.click();
+        } else {
+          const form = document.querySelector('#auth-form, form');
+          if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      });
+
+      // ログイン完了を待機
+      await page.waitForSelector('#c-body, #feed, article.post', { timeout: 20000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // ログイン後ダイアログ等のスキップ
     const skipBtn = await page.$('.btn-skip, button.skip, #btn-skip');
     if (skipBtn) {
-      await skipBtn.click();
+      await skipBtn.click().catch(() => {});
       await new Promise(r => setTimeout(r, 1500));
     }
 
@@ -323,7 +357,7 @@ async function executeBotPost(retryCount = 0) {
     console.log("アナウンス投稿完了！タイムラインの反映を待機中...");
     await new Promise(r => setTimeout(r, 3500));
 
-    // BOT（シュガー）自身が投稿した要素をピンポイント特定し、基準投稿番号(botPostId)を確定
+    // BOT（シュガー）自身の投稿をピンポイント特定
     const myBotUser = (process.env.SNS_USER || '').replace(/^@/, '').trim().toLowerCase();
     let botPostInfo = null;
 
@@ -331,7 +365,6 @@ async function executeBotPost(retryCount = 0) {
       botPostInfo = await page.evaluate((botUser, targetKeyword) => {
         const articles = Array.from(document.querySelectorAll('article.post, .post'));
         for (const art of articles) {
-          // 「✨ 注目」投稿は除外
           const isFeatured = 
             art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
             art.querySelector('.hl-tag') !== null ||
@@ -350,7 +383,6 @@ async function executeBotPost(retryCount = 0) {
           const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
           const postId = rawId ? parseInt(rawId, 10) : null;
 
-          // シュガー（自分）の投稿、または本文にお題・BOT署名が含まれる投稿を特定
           const isSugar = name.includes('シュガー') || (botUser && handle.toLowerCase() === botUser);
           const isBotPost = body.includes('【全国アナウンス（BOT）】') || (targetKeyword && body.includes(targetKeyword));
 
@@ -391,7 +423,7 @@ async function executeBotPost(retryCount = 0) {
       console.log("--------------------------------------------------");
 
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000; // 5分間
+      const competitionDurationMs = 5 * 60 * 1000;
       const qualifiedSubmissions = new Map();
 
       while (Date.now() - startTime < competitionDurationMs) {
@@ -401,11 +433,9 @@ async function executeBotPost(retryCount = 0) {
         const foundList = await page.evaluate((targetKeyword, myBotHandle, basePostId) => {
           const results = [];
           const articles = Array.from(document.querySelectorAll('article.post, .post'));
-
           const normKey = targetKeyword.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
           articles.forEach((art, index) => {
-            // 「✨ 注目」ピン留め投稿は除外
             const isFeatured = 
               art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
               art.querySelector('.hl-tag') !== null ||
@@ -417,7 +447,6 @@ async function executeBotPost(retryCount = 0) {
             const bodyText = (bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '').trim();
             const normBody = bodyText.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
-            // 「その単語が入ってたらいい（部分一致）」判定
             if (normBody.includes(normKey)) {
               const handleEl = art.querySelector('.post-handle');
               const nameEl = art.querySelector('.post-name');
@@ -477,7 +506,6 @@ async function executeBotPost(retryCount = 0) {
 
       let winner = null;
       if (qualifiedSubmissions.size > 0) {
-        // 最も投稿番号が小さい人（物理的に最速で投稿した人）を1位とする
         const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
           if (a.postId && b.postId) return a.postId - b.postId;
           return a.discoveredAt - b.discoveredAt;
@@ -555,7 +583,7 @@ async function executeBotPost(retryCount = 0) {
           await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2" });
           await new Promise(r => setTimeout(r, 2000));
 
-          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
+          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\\n制限時間5分以内に正解者はいませんでした。\\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
           await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', noWinnerMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
@@ -571,17 +599,21 @@ async function executeBotPost(retryCount = 0) {
     console.log("すべての処理が正常に完了しました！");
   } catch (error) {
     console.error(`エラー発生 (試行 ${retryCount + 1}): `, error.message);
-    await page.screenshot({ path: `error-debug-${retryCount + 1}.png`, fullPage: true }).catch(() => {});
+    if (page) {
+      await page.screenshot({ path: `error-debug-${retryCount + 1}.png`, fullPage: true }).catch(() => {});
+    }
 
     if (retryCount < maxRetries) {
       console.log(`5秒後にリトライします (${retryCount + 1}/${maxRetries})...`);
-      await browser.close();
+      if (browser) await browser.close().catch(() => {});
       await new Promise(r => setTimeout(r, 5000));
       return executeBotPost(retryCount + 1);
     }
     throw error;
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
 }
 
