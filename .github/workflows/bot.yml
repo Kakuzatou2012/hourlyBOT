@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      force_post:
+        description: '時間外でも実際に投稿・送金する（通常テスト時は未チェックでOK）'
+        type: boolean
+        default: false
 
 concurrency:
   group: bot-execution
@@ -12,7 +17,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,20 +27,17 @@ jobs:
         with:
           node-version: '20'
 
-      # package-lock.json が無くても一瞬（2〜3秒）でインストール完了
-      - name: Install dependencies (Fast)
-        env:
-          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+      - name: Install dependencies
         run: npm install
 
-      # Ubuntu内蔵のGoogle Chromeを利用
       - name: Run National Bot
         env:
           SNS_USER: ${{ secrets.SNS_USER }}
           SNS_PASS: ${{ secrets.SNS_PASS }}
-          PUPPETEER_EXECUTABLE_PATH: '/usr/bin/google-chrome'
+          FORCE_POST: ${{ inputs.force_post || 'false' }}
         run: node bot.js
 
+      # テスト直前スクショを含め、全スクリーンショットを保存
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
