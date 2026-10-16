@@ -9,11 +9,11 @@ on:
       mode:
         description: '実行モードを選択してください'
         required: true
-        default: 'event_now'
+        default: 'auto'
         type: choice
         options:
-          - 'event_now'    # ★【不定期型イベント】今すぐタイピング選手権を開催 (手動投稿 ＆ 5分審査 ＆ 25コイン送金)
           - 'auto'         # 定時自動判定 (毎時アナウンス / 18時はイベント)
+          - 'event_now'    # ★【手動イベント】今すぐ不定期タイピング選手権を開催 (5分審査 ＆ コイン送金)
           - 'dry_run'      # 安全テストモード (送金直前スクショ ＆ 直近ユーザー確認)
           - 'force_post'   # 通常アナウンスを即時投稿
       custom_keyword:
@@ -34,7 +34,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # 5分間の審査時間があるため10分に設定
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,7 +56,6 @@ jobs:
           CUSTOM_COINS: ${{ inputs.custom_coins || '25' }}
         run: node bot.js
 
-      # スクリーンショットをアーティファクトに保存
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
