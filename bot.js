@@ -3,16 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (強化版 v3.5 - 安全テストモード＆スクショ完全対応)
- * 
- * 特徴:
- * 1. 時間外のテスト実行時でもスキップせず「送信直前まで操作を進めてスクショ保存」
- * 2. 毎時0〜10分以内の定時実行（または FORCE_POST=true）なら本番投稿＆送金
- * 3. 以下の4枚の検証スクショを必ずアーティファクトに保存:
- *    - 1-login-success.png (ログイン完了)
- *    - 2-post-before-submit.png (アナウンス入力完了・投稿直前)
- *    - 3-kokka-keizai.png (国家 > 経済 画面)
- *    - 4-coin-modal-ready.png (5コイン送金モーダル入力完了・送る直前)
+ * 統合版 全国アナウンスBOT (v3.6 安定ブラウザ起動 ＆ 安全テスト両対応版)
  */
 
 const KEYWORDS = [
@@ -55,7 +46,7 @@ async function clickPostButton(page) {
   });
 }
 
-// 本番用 送金処理
+// 5コイン送金処理
 async function sendCoinsToWinner(page, handle) {
   console.log(`💰 @${handle} さんへ5コインを送金中...`);
   
@@ -99,7 +90,6 @@ async function sendCoinsToWinner(page, handle) {
   await page.screenshot({ path: 'coin-sent-result.png', fullPage: true }).catch(() => {});
 }
 
-// メイン実行
 async function executeBotPost(retryCount = 0) {
   const maxRetries = 2;
   const now = new Date();
@@ -107,7 +97,6 @@ async function executeBotPost(retryCount = 0) {
   const jstHours = jstDate.getHours();
   const jstMinutes = jstDate.getMinutes();
 
-  // 判定: 毎時0〜10分以内、または手動強制フラグ(FORCE_POST)があれば本番実行
   const isForcePost = (process.env.FORCE_POST === 'true');
   const isDryRun = (jstMinutes > 10) && !isForcePost;
 
@@ -115,30 +104,24 @@ async function executeBotPost(retryCount = 0) {
 
   if (isDryRun) {
     console.log("--------------------------------------------------");
-    console.log("🧪 【安全テストモード (Dry Run)】が起動しました！");
-    console.log(`現在は ${jstHours}時${jstMinutes}分 のため、実際の投稿・送金ボタンは押さずに`);
-    console.log("「入力完了直前のスクリーンショット」を撮影して動作検証します。");
+    console.log("🧪 【安全テストモード】が起動しました！");
+    console.log(`現在は ${jstHours}時${jstMinutes}分 のため、送信直前まで進めてスクショを撮影します。`);
     console.log("--------------------------------------------------");
   } else {
-    console.log("🚀 【本番実行モード】定時実行として実際に投稿・送金を行います。");
+    console.log("🚀 【本番実行モード】実際に投稿・送金を行います。");
   }
 
   const isMorningBot = (jstHours === 4);
   const keyword = isMorningBot ? '' : getRandomKeyword();
   const message = createPostMessage(jstHours, keyword);
 
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+  // クラッシュしない安定したPuppeteer公式起動設定
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
       '--disable-gpu'
     ]
   });
@@ -147,14 +130,14 @@ async function executeBotPost(retryCount = 0) {
   await page.setViewport({ width: 1280, height: 800 });
 
   try {
-    console.log("1. SNSへアクセス中 (national-sns.vercel.app)...");
+    console.log("1. SNSへアクセス中...");
     await page.goto('https://national-sns.vercel.app', {
       waitUntil: 'networkidle2',
       timeout: 30000
     });
 
-    // ログイン処理
-    console.log("2. ログインフォームを入力中...");
+    // ログイン入力
+    console.log("2. ログイン情報を入力中...");
     await page.waitForSelector('#a-handle', { timeout: 15000 });
     await page.type('#a-handle', process.env.SNS_USER || '', { delay: 30 });
 
@@ -183,7 +166,7 @@ async function executeBotPost(retryCount = 0) {
       }
     });
 
-    // ログイン後待機 & スキップボタン
+    // 画面遷移待機 & スキップボタン
     await page.waitForFunction(() => {
       const postBox = document.querySelector('#c-body');
       const skipBtn = Array.from(document.querySelectorAll('button')).find(
@@ -207,12 +190,12 @@ async function executeBotPost(retryCount = 0) {
       await new Promise(r => setTimeout(r, 1500));
     }
 
-    // 📸 スクショ 1: ログイン完了画面
+    // 📸 スクショ 1: ログイン完了
     await page.screenshot({ path: '1-login-success.png', fullPage: true });
-    console.log("📸 [スクショ1保存] 1-login-success.png (ログイン成功)");
+    console.log("📸 [スクショ1保存] 1-login-success.png");
 
-    // 3. アナウンスメッセージ入力
-    console.log("3. アナウンスメッセージを入力中...");
+    // アナウンスメッセージ入力
+    console.log("3. メッセージを入力中...");
     await page.waitForSelector('#c-body', { timeout: 15000 });
     await page.type('#c-body', message, { delay: 30 });
     await new Promise(r => setTimeout(r, 1000));
@@ -230,19 +213,15 @@ async function executeBotPost(retryCount = 0) {
       }
     }
 
-    // 📸 スクショ 2: 投稿ボタンを押す直前の状態！
+    // 📸 スクショ 2: 投稿ボタンを押す直前！
     await page.screenshot({ path: '2-post-before-submit.png', fullPage: true });
-    console.log("📸 [スクショ2保存] 2-post-before-submit.png (投稿メッセージ入力完了・送信直前)");
+    console.log("📸 [スクショ2保存] 2-post-before-submit.png (投稿直前)");
 
-    // ========================================================
-    // 【A. 安全テストモードの場合（時間外の実行）】
-    // 実際の投稿は行わず、そのまま送金モーダルの入力直前テストへ進む
-    // ========================================================
+    // 【テストモード（時間外）の場合】
     if (isDryRun) {
-      console.log("⚠️ [テスト中] 投稿ボタンは押さずに、「国家」>「経済」>「コイン送金」の直前テストへ進みます...");
+      console.log("⚠️ [テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
 
-      // 「国家」をクリック
-      console.log("4. 「国家」タブへ移動中...");
+      // 国家
       await page.evaluate(() => {
         const links = Array.from(document.querySelectorAll('a, button, span'));
         const el = links.find(l => (l.innerText || l.textContent || '').trim() === '国家');
@@ -250,8 +229,7 @@ async function executeBotPost(retryCount = 0) {
       });
       await new Promise(r => setTimeout(r, 2000));
 
-      // 「経済」をクリック
-      console.log("5. 「経済」タブへ移動中...");
+      // 経済
       await page.evaluate(() => {
         const elements = Array.from(document.querySelectorAll('.t-lbl, span, a, button'));
         const el = elements.find(s => (s.innerText || s.textContent || '').trim() === '経済');
@@ -261,47 +239,36 @@ async function executeBotPost(retryCount = 0) {
 
       // 📸 スクショ 3: 経済画面
       await page.screenshot({ path: '3-kokka-keizai.png', fullPage: true });
-      console.log("📸 [スクショ3保存] 3-kokka-keizai.png (国家・経済画面表示完了)");
+      console.log("📸 [スクショ3保存] 3-kokka-keizai.png");
 
-      // 「コインを送る」ボタン (#send)
-      console.log("6. 「コインを送る」(#send) をクリック中...");
+      // コインを送る (#send)
       await page.waitForSelector('#send', { timeout: 10000 });
       await page.click('#send');
       await new Promise(r => setTimeout(r, 1500));
 
-      // モーダル枠へのテスト入力
-      console.log("7. 送金モーダルの各枠に入力中...");
-      // ユーザーID (#mf-h)
+      // 送金モーダルへのテスト入力
       await page.waitForSelector('#mf-h', { timeout: 10000 });
       await page.type('#mf-h', (process.env.SNS_USER || 'sample_user'), { delay: 30 });
 
-      // 金額 (#mf-a)
       await page.waitForSelector('#mf-a', { timeout: 10000 });
       await page.type('#mf-a', '5', { delay: 30 });
 
-      // コメント (#mf-m)
       await page.waitForSelector('#mf-m', { timeout: 10000 });
       await page.type('#mf-m', '【テスト実行】タイピング選手権 優勝賞金5コイン（送金直前スクショ確認用）', { delay: 30 });
       await new Promise(r => setTimeout(r, 1500));
 
-      // 📸 スクショ 4: 送るボタンを押す直前の状態！
+      // 📸 スクショ 4: 送るボタンを押す直前！
       await page.screenshot({ path: '4-coin-modal-ready.png', fullPage: true });
-      console.log("📸 [スクショ4保存] 4-coin-modal-ready.png (送金情報入力完了・確定ボタン直前)");
+      console.log("📸 [スクショ4保存] 4-coin-modal-ready.png (送金直前)");
 
       console.log("==================================================");
-      console.log("🎉 【テスト大成功！】");
-      console.log("・ログイン ➔ アナウンス入力 ➔ 国家 ➔ 経済 ➔ 送金モーダル入力");
-      console.log("すべての画面操作と入力が正常に完了したことを確認しました！");
-      console.log("※テストモードのため確定ボタンは押さずに安全終了しました。");
-      console.log("GitHub Actions の Artifacts (bot-screenshots) をダウンロードして4枚の画像をご確認ください。");
+      console.log("🎉 【テスト大成功！】全画面の操作・入力が正常完了しました！");
+      console.log("Actionsの Artifacts (bot-screenshots) から4枚の画像を確認できます。");
       console.log("==================================================");
       return;
     }
 
-    // ========================================================
-    // 【B. 本番モードの場合（毎時0〜10分以内 または FORCE_POST=true）】
-    // 実際に投稿を行い、タイピング回答者を監視して5コインを送金する
-    // ========================================================
+    // 【本番モードの場合】
     console.log("アナウンスを投稿します...");
     await clickPostButton(page);
     await new Promise(r => setTimeout(r, 4000));
