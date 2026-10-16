@@ -3,14 +3,14 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (完成版)
- * - タイピング選手権（指定12単語・絵文字なし）
- * - 最速正解者に5コイン自動送金
+ * 統合版 全国アナウンスBOT
+ * - 毎日18時(午後6時)限定: タイピング選手権 ＆ 25コイン自動送金
  * - 朝4時限定: 画像付きおはようアナウンス (george.jpg)
- * - 安全テストモード（時間外実行時は送信直前でスクショ保存）
+ * - その他の時間: 通常の時報アナウンス (コイン消費なし)
+ * - 絵文字なし
  */
 
-// 指定いただいた12単語
+// タイピング選手権のお題（指定12単語）
 const KEYWORDS = [
   "新幹線",
   "自動販売機",
@@ -30,12 +30,20 @@ function getRandomKeyword() {
   return KEYWORDS[Math.floor(Math.random() * KEYWORDS.length)];
 }
 
-// 投稿メッセージ生成 (絵文字なし)
+// 投稿メッセージ生成
 function createPostMessage(hour, keyword) {
+  // 朝4時
   if (hour === 4) {
     return "【全国アナウンス（BOT）】\nおはよう！\n朝4時に 何してるんだい？\n#全国アナウンスBOT";
   }
-  return `【全国アナウンス（BOT）】\n${hour}時になりました。\n\n【イベント】\nタイピング選手権\n次のワードを最速で投稿したユーザーには\n5コインを配布します！\nキーワード\n『${keyword}』\n#全国アナウンスBOT`;
+
+  // 毎日午後6時 (18時) 限定イベント
+  if (hour === 18) {
+    return `【全国アナウンス（BOT）】\n18時になりました。\n\n【イベント】\nタイピング選手権\n次のワードを最速で投稿したユーザーには\n25コインを配布します！\nキーワード\n『${keyword}』\n#全国アナウンスBOT`;
+  }
+
+  // その他の通常時報 (コイン消費なし)
+  return `【全国アナウンス（BOT）】\n${hour}時になりました。\n#全国アナウンスBOT`;
 }
 
 async function clickPostButton(page) {
@@ -61,9 +69,9 @@ async function clickPostButton(page) {
   });
 }
 
-// 5コイン送金処理 (絵文字なし)
+// 25コイン送金処理
 async function sendCoinsToWinner(page, handle) {
-  console.log(`@${handle} さんへ5コインを送金中...`);
+  console.log(`@${handle} さんへ25コインを送金中...`);
   
   // 1. 国家
   await page.evaluate(() => {
@@ -90,19 +98,20 @@ async function sendCoinsToWinner(page, handle) {
   await page.waitForSelector('#mf-h', { timeout: 10000 });
   await page.type('#mf-h', handle, { delay: 40 });
 
+  // 金額: 25コイン
   await page.waitForSelector('#mf-a', { timeout: 10000 });
-  await page.type('#mf-a', '5', { delay: 40 });
+  await page.type('#mf-a', '25', { delay: 40 });
 
   // 送金メモ (絵文字なし)
   await page.waitForSelector('#mf-m', { timeout: 10000 });
-  await page.type('#mf-m', 'タイピング選手権 優勝賞金 (5コイン)', { delay: 40 });
+  await page.type('#mf-m', 'タイピング選手権 優勝賞金 (25コイン)', { delay: 40 });
   await new Promise(r => setTimeout(r, 1000));
 
   // 5. 送る (#modal-ok)
   await page.waitForSelector('#modal-ok', { timeout: 10000 });
   await page.click('#modal-ok');
   await new Promise(r => setTimeout(r, 3000));
-  console.log(`@${handle} さんへの5コイン送金が完了しました。`);
+  console.log(`@${handle} さんへの25コイン送金が完了しました。`);
   await page.screenshot({ path: 'coin-sent-result.png', fullPage: true }).catch(() => {});
 }
 
@@ -116,6 +125,10 @@ async function executeBotPost(retryCount = 0) {
   const isForcePost = (process.env.FORCE_POST === 'true');
   const isDryRun = (jstMinutes > 10) && !isForcePost;
 
+  // 判定: 午後6時 (18時) のみタイピングイベントを開催
+  const isTypingEvent = (jstHours === 18);
+  const isMorningBot = (jstHours === 4);
+
   console.log(`[BOT実行開始] JST時刻: ${jstHours}時${jstMinutes}分 (試行: ${retryCount + 1})`);
 
   if (isDryRun) {
@@ -124,11 +137,10 @@ async function executeBotPost(retryCount = 0) {
     console.log(`現在は ${jstHours}時${jstMinutes}分 のため、送信直前まで進めてスクショを撮影します。`);
     console.log("--------------------------------------------------");
   } else {
-    console.log("【本番実行モード】実際に投稿・送金を行います。");
+    console.log(`【本番実行モード】${isTypingEvent ? '18時タイピング選手権（賞金25コイン）' : '通常時報'}を投稿します。`);
   }
 
-  const isMorningBot = (jstHours === 4);
-  const keyword = isMorningBot ? '' : getRandomKeyword();
+  const keyword = isTypingEvent ? getRandomKeyword() : '';
   const message = createPostMessage(jstHours, keyword);
 
   const browser = await puppeteer.launch({
@@ -258,15 +270,15 @@ async function executeBotPost(retryCount = 0) {
       await page.click('#send');
       await new Promise(r => setTimeout(r, 1500));
 
-      // 送金モーダルへのテスト入力 (絵文字なし)
+      // 送金モーダルへのテスト入力 (25コイン)
       await page.waitForSelector('#mf-h', { timeout: 10000 });
       await page.type('#mf-h', (process.env.SNS_USER || 'sample_user'), { delay: 30 });
 
       await page.waitForSelector('#mf-a', { timeout: 10000 });
-      await page.type('#mf-a', '5', { delay: 30 });
+      await page.type('#mf-a', '25', { delay: 30 });
 
       await page.waitForSelector('#mf-m', { timeout: 10000 });
-      await page.type('#mf-m', 'タイピング選手権 優勝賞金5コイン(テスト)', { delay: 30 });
+      await page.type('#mf-m', 'タイピング選手権 優勝賞金25コイン(テスト)', { delay: 30 });
       await new Promise(r => setTimeout(r, 1500));
 
       // スクショ 4: 送るボタンを押す直前
@@ -285,7 +297,8 @@ async function executeBotPost(retryCount = 0) {
     await new Promise(r => setTimeout(r, 4000));
     console.log("アナウンス投稿完了");
 
-    if (!isMorningBot) {
+    // 18時のみタイピング選手権の回答者を監視
+    if (isTypingEvent) {
       console.log(`キーワード 『${keyword}』 の投稿を待機中（最大70秒）...`);
       const botHandle = (process.env.SNS_USER || '').replace(/^@/, '').trim();
       let winner = null;
@@ -330,6 +343,7 @@ async function executeBotPost(retryCount = 0) {
       }
 
       if (winner) {
+        // 勝者に25コインを送金
         await sendCoinsToWinner(page, winner.handle);
 
         try {
@@ -337,8 +351,8 @@ async function executeBotPost(retryCount = 0) {
           await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
           await new Promise(r => setTimeout(r, 2000));
           await page.waitForSelector('#c-body', { timeout: 10000 });
-          // 結果発表メッセージ (絵文字なし)
-          const resultMsg = `【結果発表】\nタイピング選手権、最速正解者は\n@${winner.handle} さんでした！\n賞金5コインを送金しました！\n次回もお楽しみに！\n#全国アナウンスBOT`;
+          // 結果発表メッセージ
+          const resultMsg = `【結果発表】\nタイピング選手権、最速正解者は\n@${winner.handle} さんでした！\n賞金25コインを送金しました！\n次回もお楽しみに！\n#全国アナウンスBOT`;
           await page.type('#c-body', resultMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
