@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v4.6 - 直近3名確認 ＆ 5分遅延許容 ＆ 本日のイベント優勝者発表)
+ * 統合版 全国アナウンスBOT (v4.7 - 非同期読み込み完全待機 ＆ 直近3名確認 ＆ 優勝者発表)
  */
 
 const KEYWORDS = [
@@ -216,36 +216,80 @@ async function executeBotPost(retryCount = 0) {
     await page.screenshot({ path: '1-login-success.png', fullPage: true });
     console.log("[スクショ1保存] 1-login-success.png");
 
-    // 直近1〜3番目のユーザー情報を取得・出力
+    // ========================================================
+    // 【タイムライン描画待機 ＆ 直近3名のユーザー情報取得】
+    // ========================================================
     console.log("==================================================");
-    console.log("【タイムライン確認テスト】直近3件の投稿を解析中...");
+    console.log("【タイムライン確認テスト】投稿の読み込み待機中...");
+
+    // タイムライン描画完了を最大10秒待機
+    try {
+      await page.waitForSelector('article.post, .post, .post-body', { timeout: 10000 });
+      await new Promise(r => setTimeout(r, 2000));
+    } catch (e) {
+      console.log("待機タイムアウト: スクロールして再試行中...");
+      await page.evaluate(() => window.scrollBy(0, 300));
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    const debugStats = await page.evaluate(() => {
+      const articles = document.querySelectorAll('article.post, .post').length;
+      const bodies = document.querySelectorAll('.post-body').length;
+      return { articles, bodies };
+    });
+    console.log(`[DOM状況] 発見した投稿要素: ${debugStats.articles}件 (本文: ${debugStats.bodies}件)`);
+
     const recentPosts = await page.evaluate(() => {
       const posts = [];
-      const bodyElements = Array.from(document.querySelectorAll('.post-body, div.post-body'));
+      const articles = Array.from(document.querySelectorAll('article.post, .post'));
 
-      for (const bodyEl of bodyElements) {
+      for (const art of articles) {
         if (posts.length >= 3) break;
-        const container = bodyEl.closest('.post, article, div') || bodyEl.parentElement;
-        const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
-        const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
+        const nameEl = art.querySelector('.post-name');
+        const handleEl = art.querySelector('.post-handle');
+        const bodyEl = art.querySelector('.post-body');
 
-        const handle = (handleEl ? (handleEl.innerText || handleEl.textContent || '') : '').replace(/^@/, '').trim();
-        const name = (nameEl ? (nameEl.innerText || nameEl.textContent || '') : '').trim();
-        const text = (bodyEl.innerText || bodyEl.textContent || '').trim();
+        const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
+        const handle = handleEl ? (handleEl.innerText || handleEl.textContent || '').replace(/^@/, '').trim() : '';
+        const comment = bodyEl ? (bodyEl.innerText || bodyEl.textContent || '').trim() : '';
 
-        if (text) {
+        if (comment) {
           posts.push({
             handle: handle || '（ハンドルなし）',
             name: name || '（表示名なし）',
-            comment: text
+            comment: comment
           });
         }
       }
+
+      // フォールバック (.post-body から)
+      if (posts.length === 0) {
+        const bodyEls = Array.from(document.querySelectorAll('.post-body, div.post-body'));
+        for (const bodyEl of bodyEls) {
+          if (posts.length >= 3) break;
+          const container = bodyEl.closest('.post, article, div') || bodyEl.parentElement;
+          const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
+          const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
+
+          const handle = (handleEl ? (handleEl.innerText || handleEl.textContent || '') : '').replace(/^@/, '').trim();
+          const name = (nameEl ? (nameEl.innerText || nameEl.textContent || '') : '').trim();
+          const text = (bodyEl.innerText || bodyEl.textContent || '').trim();
+
+          if (text) {
+            posts.push({
+              handle: handle || '（ハンドルなし）',
+              name: name || '（表示名なし）',
+              comment: text
+            });
+          }
+        }
+      }
+
       return posts;
     });
 
     if (recentPosts.length === 0) {
-      console.log("⚠️ タイムライン上に投稿が見つかりませんでした。");
+      console.log("⚠️ タイムライン上に投稿が見つかりませんでした (0件または非公開の可能性)。");
     } else {
       recentPosts.forEach((p, idx) => {
         console.log(`--------------------------------------------------`);
@@ -429,7 +473,6 @@ async function executeBotPost(retryCount = 0) {
           await new Promise(r => setTimeout(r, 2000));
           await page.waitForSelector('#c-body', { timeout: 10000 });
 
-          // ★「本日のイベント優勝者は〜」のフォーマット
           const winnerDisplayName = winner.name ? (' (' + winner.name + ')') : '';
           const resultMsg = `【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金25コインを送金しました。\n明日もお楽しみに！\n#全国アナウンスBOT`;
           
