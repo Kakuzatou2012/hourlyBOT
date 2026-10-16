@@ -21,14 +21,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
-      # Chromiumダウンロードをスキップして爆速インストール（1分半→15秒）
+      # Chromiumダウンロードをスキップして2〜3秒で高速インストール
       - name: Install dependencies (Fast)
         env:
           PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
-        run: |
-          npm ci || npm install
+        run: npm install
 
       # Ubuntu内蔵のGoogle Chromeを利用
       - name: Run National Bot
