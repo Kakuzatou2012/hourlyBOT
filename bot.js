@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.0 - 投稿番号#〇〇〇〇取得 ＆ キーワード部分一致 ＆ 5分後連番審査)
+ * 統合版 全国アナウンスBOT (v5.0 - 不定期型イベント手動開催 ＆ 注目投稿✨除外 ＆ シュガーBOT特定)
  */
 
 const KEYWORDS = [
@@ -25,13 +25,16 @@ function getRandomKeyword() {
   return KEYWORDS[Math.floor(Math.random() * KEYWORDS.length)];
 }
 
-// 投稿メッセージ生成 (絵文字なし)
-function createPostMessage(hour, keyword) {
+// 投稿メッセージ生成 (絵文字なし・シンプル構成)
+function createPostMessage(hour, keyword, isManualEvent, coins) {
+  if (isManualEvent) {
+    return `【全国アナウンス（BOT）】\n【不定期イベント開催】\nデイリータイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
+  }
   if (hour === 4) {
     return "【全国アナウンス（BOT）】\nおはようございます。\n朝4時になりました。\n#全国アナウンスBOT";
   }
   if (hour === 18) {
-    return `【全国アナウンス（BOT）】\n18時になりました。\n\n【イベント】\nデイリータイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n25コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
+    return `【全国アナウンス（BOT）】\n18時になりました。\n\n【イベント】\nデイリータイピング選手権（制限時間5分）\n次のワードを最速で投稿したユーザーに\n${coins}コインを配布します！\n\nお題キーワード\n『${keyword}』\n#全国アナウンスBOT`;
   }
   return `【全国アナウンス（BOT）】\n${hour}時になりました。\n#全国アナウンスBOT`;
 }
@@ -60,155 +63,92 @@ async function clickPostButton(page) {
   });
 }
 
-// コイン送金処理 (国家 > 経済 > コインを送る)
-async function sendCoinsToWinner(page, handle, amount = 25) {
-  console.log(`[@${handle}] さんへ ${amount} コインを送金中...`);
-  
-  // 1. 国家
-  await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a, button, span'));
-    const el = links.find(l => (l.innerText || l.textContent || '').trim() === '国家');
-    if (el) el.click();
-  });
-  await new Promise(r => setTimeout(r, 2000));
-
-  // 2. 経済
-  await page.evaluate(() => {
-    const elements = Array.from(document.querySelectorAll('.t-lbl, span, a, button'));
-    const el = elements.find(s => (s.innerText || s.textContent || '').trim() === '経済');
-    if (el) el.click();
-  });
-  await new Promise(r => setTimeout(r, 2000));
-
-  // 3. コインを送る (#send)
-  await page.waitForSelector('#send', { timeout: 10000 });
-  await page.click('#send');
-  await new Promise(r => setTimeout(r, 1500));
-
-  // 4. 入力 (ユーザーID, 金額, コメント)
-  await page.waitForSelector('#mf-h', { timeout: 10000 });
-  await page.type('#mf-h', handle, { delay: 40 });
-
-  await page.waitForSelector('#mf-a', { timeout: 10000 });
-  await page.type('#mf-a', String(amount), { delay: 40 });
-
-  await page.waitForSelector('#mf-m', { timeout: 10000 });
-  await page.type('#mf-m', `タイピング選手権 優勝賞金 (${amount}コイン)`, { delay: 40 });
-  await new Promise(r => setTimeout(r, 1000));
-
-  // 5. 送る (#modal-ok)
-  await page.waitForSelector('#modal-ok', { timeout: 10000 });
-  await page.click('#modal-ok');
-  await new Promise(r => setTimeout(r, 3000));
-  console.log(`[@${handle}] さんへの ${amount} コイン送金が完了しました。`);
-  await page.screenshot({ path: 'coin-sent-result.png', fullPage: true }).catch(() => {});
-}
-
-// メイン実行
 async function executeBotPost(retryCount = 0) {
   const maxRetries = 2;
-  const now = new Date();
-  const jstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
-  const jstHours = jstDate.getHours();
-  const jstMinutes = jstDate.getMinutes();
-
-  // 遅延許容を5分までに設定
-  const isForcePost = (process.env.FORCE_POST === 'true');
-  const isDryRun = (jstMinutes > 5) && !isForcePost;
-
-  // 毎日18時(午後6時)がタイピング大会開催時間 (手動FORCE_POST時も対象)
-  const isEventHour = (jstHours === 18) || isForcePost;
-  const isMorningBot = (jstHours === 4);
-
-  console.log(`[BOT実行開始] JST時刻: ${jstHours}時${jstMinutes}分 (試行: ${retryCount + 1})`);
-
-  if (isDryRun) {
-    console.log("--------------------------------------------------");
-    console.log("[安全テストモード (Dry Run)]");
-    console.log(`現在は ${jstHours}時${jstMinutes}分 (5分を超過) のため、実際の確定ボタンは押さずに`);
-    console.log("タイムライン解析 ＆ 全画面スクリーンショットを撮影して検証します。");
-    console.log("--------------------------------------------------");
-  } else {
-    console.log(`[本番実行モード] 定時実行 (現在: ${jstMinutes}分 / 5分以内) として処理を開始します。`);
-    if (isEventHour) {
-      console.log("★ 毎日18時: タイピング選手権 (賞金25コイン / 制限時間5分審査) が開催されます！");
-    }
-  }
-
-  const keyword = isEventHour ? getRandomKeyword() : '';
-  const message = createPostMessage(jstHours, keyword);
-
   const browser = await puppeteer.launch({
-    headless: true,
+    headless: "new",
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process'
     ]
   });
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
-
   try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+
+    // JST日時の算出
+    const now = new Date();
+    const jstOffset = 9 * 60;
+    const jstDate = new Date(now.getTime() + (jstOffset + now.getTimezoneOffset()) * 60000);
+    const jstHour = jstDate.getHours();
+    const jstMinutes = jstDate.getMinutes();
+
+    // 実行引数・環境変数の読み込み
+    const args = process.argv.slice(2);
+    const rawMode = (process.env.MODE || process.env.INPUT_MODE || '').trim().toLowerCase();
+    const isEventNow = args.includes('--event-now') || args.includes('event') || rawMode === 'event_now' || process.env.EVENT_NOW === 'true';
+    const isForcePost = args.includes('--force') || rawMode === 'force_post' || process.env.FORCE_POST === 'true';
+    const isExplicitDryRun = rawMode === 'dry_run' || process.env.DRY_RUN === 'true';
+
+    // カスタムお題と賞金
+    const customKeyword = (process.env.CUSTOM_KEYWORD || '').trim();
+    const eventCoins = parseInt(process.env.CUSTOM_COINS || '25', 10) || 25;
+
+    // イベント判定: 不定期手動イベント または 毎日18時
+    const isScheduledEvent = (jstHour === 18);
+    const isEventHour = isEventNow || isScheduledEvent;
+    const isMorningBot = (jstHour === 4) && !isEventNow;
+
+    const keyword = isEventHour ? (customKeyword || getRandomKeyword()) : null;
+    const message = createPostMessage(jstHour, keyword, isEventNow, eventCoins);
+
+    // 安全テストモード(Dry-Run)判定
+    const isDryRun = isExplicitDryRun || (!isEventNow && !isForcePost && jstMinutes > 5);
+
+    console.log("==================================================");
+    console.log(`[BOT実行開始] JST時刻: ${jstHour}時${jstMinutes}分 (試行: ${retryCount + 1})`);
+    if (isEventNow) {
+      console.log("★【不定期型イベント手動開催モード】");
+      console.log(`   時間に関係なく、今すぐタイピング選手権を開催します (賞金: ${eventCoins}コイン / お題: 『${keyword}』)`);
+    } else if (isDryRun) {
+      console.log("--------------------------------------------------");
+      console.log("[安全テストモード (Dry Run)]");
+      console.log(`現在は ${jstHour}時${jstMinutes}分 (5分を超過) のため、実際の確定ボタンは押さずに`);
+      console.log("タイムライン解析 ＆ 全画面スクリーンショットを撮影して検証します。");
+      console.log("--------------------------------------------------");
+    } else {
+      console.log(`[本番実行モード] 定時実行 (現在: ${jstMinutes}分 / 5分以内) として処理を開始します。`);
+      if (isEventHour) {
+        console.log(`★ 毎日18時: タイピング選手権 (賞金${eventCoins}コイン / 制限時間5分審査) が開催されます！`);
+      }
+    }
+    console.log("==================================================");
+
+    // 1. サイトアクセス
     console.log("1. SNSへアクセス中...");
-    await page.goto('https://national-sns.vercel.app', {
-      waitUntil: 'networkidle2',
-      timeout: 30000
-    });
+    await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2", timeout: 45000 });
 
-    // ログイン処理
+    // 2. ログイン処理
     console.log("2. ログイン情報を入力中...");
-    await page.waitForSelector('#a-handle', { timeout: 15000 });
-    await page.type('#a-handle', process.env.SNS_USER || '', { delay: 30 });
+    await page.waitForSelector('#auth-u', { timeout: 15000 });
+    await page.type('#auth-u', process.env.SNS_USER, { delay: 30 });
+    await page.type('#auth-p', process.env.SNS_PASS, { delay: 30 });
 
-    await page.waitForSelector('#a-pass', { timeout: 10000 });
-    await page.type('#a-pass', process.env.SNS_PASS || '', { delay: 30 });
+    const btnSelector = '#btn-login';
+    await page.waitForSelector(btnSelector);
+    await page.click(btnSelector);
 
-    // ログインボタン
-    await page.waitForFunction(() => {
-      const btns = Array.from(document.querySelectorAll('button, input.btn, .btn'));
-      return btns.some(el => {
-        const text = (el.innerText || el.value || '').trim();
-        const cls = el.className || '';
-        return text === 'ログイン' && cls.includes('btn') && !cls.includes('tab');
-      });
-    }, { timeout: 10000 });
-
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button, input.btn, .btn'));
-      for (const el of btns) {
-        const text = (el.innerText || el.value || '').trim();
-        const cls = el.className || '';
-        if (text === 'ログイン' && cls.includes('btn') && !cls.includes('tab')) {
-          el.click();
-          return;
-        }
-      }
-    });
-
-    // ログイン後の待機 & スキップボタン
-    await page.waitForFunction(() => {
-      const postBox = document.querySelector('#c-body');
-      const skipBtn = Array.from(document.querySelectorAll('button')).find(
-        b => (b.innerText || '').trim() === 'スキップ' && b.className.includes('ghost')
-      );
-      return !!postBox || !!skipBtn;
-    }, { timeout: 20000 });
-
-    const skipped = await page.evaluate(() => {
-      const skipBtn = Array.from(document.querySelectorAll('button')).find(
-        b => (b.innerText || '').trim() === 'スキップ' && b.className.includes('ghost')
-      );
-      if (skipBtn) {
-        skipBtn.click();
-        return true;
-      }
-      return false;
-    });
-    if (skipped) {
-      console.log("スキップボタンをクリックしました。");
+    // ログイン後スキップ
+    await new Promise(r => setTimeout(r, 3000));
+    const skipBtn = await page.$('.btn-skip, button.skip, #btn-skip');
+    if (skipBtn) {
+      await skipBtn.click();
       await new Promise(r => setTimeout(r, 1500));
     }
 
@@ -217,7 +157,7 @@ async function executeBotPost(retryCount = 0) {
     console.log("[スクショ1保存] 1-login-success.png");
 
     // ========================================================
-    // 【タイムライン描画待機 ＆ 投稿番号(#〇〇〇〇)つき直近投稿確認】
+    // 【タイムライン確認テスト】「✨ 注目」を除外して直近1〜3件を出力
     // ========================================================
     console.log("==================================================");
     console.log("【タイムライン確認テスト】投稿の読み込み待機中...");
@@ -238,12 +178,23 @@ async function executeBotPost(retryCount = 0) {
     });
     console.log(`[DOM状況] 発見した投稿要素: ${debugStats.articles}件 (本文: ${debugStats.bodies}件)`);
 
+    // 「✨ 注目」ピン留め投稿を除外して最新3件を取得
     const recentPosts = await page.evaluate(() => {
       const posts = [];
       const articles = Array.from(document.querySelectorAll('article.post, .post'));
 
       for (const art of articles) {
         if (posts.length >= 3) break;
+
+        // 【注目投稿の除外】
+        const isFeatured = 
+          art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
+          art.querySelector('.hl-tag') !== null ||
+          (art.innerHTML && art.innerHTML.includes('hl-tag')) ||
+          (art.className && art.className.includes('pinned'));
+
+        if (isFeatured) continue;
+
         const nameEl = art.querySelector('.post-name');
         const handleEl = art.querySelector('.post-handle');
         const bodyEl = art.querySelector('.post-body');
@@ -264,38 +215,11 @@ async function executeBotPost(retryCount = 0) {
           });
         }
       }
-
-      // フォールバック
-      if (posts.length === 0) {
-        const bodyEls = Array.from(document.querySelectorAll('.post-body, div.post-body'));
-        for (const bodyEl of bodyEls) {
-          if (posts.length >= 3) break;
-          const container = bodyEl.closest('.post, article, div') || bodyEl.parentElement;
-          const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
-          const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
-          const idEl = container ? container.querySelector('.post-id') : null;
-
-          const handle = (handleEl ? (handleEl.innerText || handleEl.textContent || '') : '').replace(/^@/, '').trim();
-          const name = (nameEl ? (nameEl.innerText || nameEl.textContent || '') : '').trim();
-          const text = (bodyEl.innerText || bodyEl.textContent || '').trim();
-          const rawId = idEl ? idEl.innerText.replace('#', '').trim() : '';
-
-          if (text) {
-            posts.push({
-              handle: handle || '（ハンドルなし）',
-              name: name || '（表示名なし）',
-              comment: text,
-              postId: rawId ? parseInt(rawId, 10) : null
-            });
-          }
-        }
-      }
-
       return posts;
     });
 
     if (recentPosts.length === 0) {
-      console.log("⚠️ タイムライン上に投稿が見つかりませんでした (0件または非公開の可能性)。");
+      console.log("⚠️ タイムライン上に通常投稿が見つかりませんでした。");
     } else {
       const latestId = recentPosts[0]?.postId;
       recentPosts.forEach((p, idx) => {
@@ -308,11 +232,11 @@ async function executeBotPost(retryCount = 0) {
         console.log(`  コメント:   "${p.comment}"`);
       });
       console.log(`--------------------------------------------------`);
-      console.log(`合計 ${recentPosts.length} 件の直近ユーザー情報（投稿番号#つき）を正常に出力しました！`);
+      console.log(`合計 ${recentPosts.length} 件の通常投稿（✨注目投稿を除外）を正常に出力しました！`);
     }
     console.log("==================================================");
 
-    // 3. アナウンスメッセージ入力
+    // 3. メッセージ入力
     console.log("3. メッセージを入力中...");
     await page.waitForSelector('#c-body', { timeout: 15000 });
     await page.type('#c-body', message, { delay: 30 });
@@ -335,7 +259,9 @@ async function executeBotPost(retryCount = 0) {
     await page.screenshot({ path: '2-post-before-submit.png', fullPage: true });
     console.log("[スクショ2保存] 2-post-before-submit.png (投稿直前)");
 
-    // 【A. 安全テストモードの場合（遅延5分超過 または 手動テスト時）】
+    // ========================================================
+    // 【A. 安全テストモードの場合】
+    // ========================================================
     if (isDryRun) {
       console.log("[テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
 
@@ -368,57 +294,104 @@ async function executeBotPost(retryCount = 0) {
       await page.type('#mf-h', testRecipient, { delay: 30 });
 
       await page.waitForSelector('#mf-a', { timeout: 10000 });
-      await page.type('#mf-a', '25', { delay: 30 });
+      await page.type('#mf-a', String(eventCoins), { delay: 30 });
 
       await page.waitForSelector('#mf-m', { timeout: 10000 });
-      await page.type('#mf-m', 'タイピング選手権 優勝賞金 (25コイン)', { delay: 30 });
+      await page.type('#mf-m', `タイピング選手権 優勝賞金 (${eventCoins}コイン)`, { delay: 30 });
       await new Promise(r => setTimeout(r, 1500));
 
       await page.screenshot({ path: '4-coin-modal-ready.png', fullPage: true });
-      console.log(`[スクショ4保存] 4-coin-modal-ready.png (@${testRecipient} 宛て25コイン送金直前)`);
+      console.log(`[スクショ4保存] 4-coin-modal-ready.png (@${testRecipient} 宛て${eventCoins}コイン送金直前)`);
 
       console.log("==================================================");
       console.log("【テスト大成功】全画面の操作・直近ユーザー確認が正常完了しました！");
-      console.log(`送金先テスト相手: @${testRecipient} (金額: 25コイン)`);
+      console.log(`送金先テスト相手: @${testRecipient} (金額: ${eventCoins}コイン)`);
       console.log("--------------------------------------------------");
       console.log("[5分後に投稿される優勝者メッセージの見本]:");
-      console.log(`【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${testRecipient} さんでした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金25コインを送金しました。\n明日もお楽しみに！\n#全国アナウンスBOT`);
+      console.log(`【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${testRecipient} さんでした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金${eventCoins}コインを送金しました。\n次回のイベントもお楽しみに！\n#全国アナウンスBOT`);
       console.log("--------------------------------------------------");
       console.log("Actionsのログにて直近1〜3位の投稿内容と、Artifactsの4枚の画像を確認できます。");
       console.log("==================================================");
       return;
     }
 
-    // 【B. 本番モードの場合（毎時0〜5分以内）】
+    // ========================================================
+    // 【B. 本番モードの場合（不定期イベント開催時 または 定時）】
+    // ========================================================
     console.log("アナウンスを投稿します...");
     await clickPostButton(page);
-    await new Promise(r => setTimeout(r, 4000));
-    console.log("アナウンス投稿完了！");
+    console.log("アナウンス投稿完了！タイムラインの反映を待機中...");
+    await new Promise(r => setTimeout(r, 3500));
 
-    // BOTのアナウンス投稿番号を取得（以降の投稿のみを審査対象とするため）
-    await new Promise(r => setTimeout(r, 2000));
-    const botPostId = await page.evaluate(() => {
-      const firstArt = document.querySelector('article.post');
-      if (firstArt) {
-        const idEl = firstArt.querySelector('.post-id');
-        const num = idEl ? idEl.innerText.replace('#', '').trim() : (firstArt.dataset.id || '');
-        return parseInt(num, 10) || 0;
-      }
-      return 0;
-    });
-    console.log(`[基準BOT投稿番号] #${botPostId || '自動検出'}`);
+    // BOT（シュガー）自身が投稿した要素をピンポイント特定し、基準投稿番号(botPostId)を確定
+    const myBotUser = (process.env.SNS_USER || '').replace(/^@/, '').trim().toLowerCase();
+    let botPostInfo = null;
 
-    // 毎日18時のタイピング大会の場合：制限時間5分(300秒)で審査！
+    for (let retry = 0; retry < 5; retry++) {
+      botPostInfo = await page.evaluate((botUser, targetKeyword) => {
+        const articles = Array.from(document.querySelectorAll('article.post, .post'));
+        for (const art of articles) {
+          // 「✨ 注目」投稿は除外
+          const isFeatured = 
+            art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
+            art.querySelector('.hl-tag') !== null ||
+            (art.innerHTML && art.innerHTML.includes('hl-tag'));
+
+          if (isFeatured) continue;
+
+          const nameEl = art.querySelector('.post-name');
+          const handleEl = art.querySelector('.post-handle');
+          const bodyEl = art.querySelector('.post-body');
+          const idEl = art.querySelector('.post-id');
+
+          const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
+          const handle = handleEl ? (handleEl.innerText || handleEl.textContent || '').replace(/^@/, '').trim() : '';
+          const body = bodyEl ? (bodyEl.innerText || bodyEl.textContent || '').trim() : '';
+          const rawId = idEl ? idEl.innerText.replace('#', '').trim() : (art.dataset.id || '');
+          const postId = rawId ? parseInt(rawId, 10) : null;
+
+          // シュガー（自分）の投稿、または本文にお題・BOT署名が含まれる投稿を特定
+          const isSugar = name.includes('シュガー') || (botUser && handle.toLowerCase() === botUser);
+          const isBotPost = body.includes('【全国アナウンス（BOT）】') || (targetKeyword && body.includes(targetKeyword));
+
+          if ((isSugar || isBotPost) && postId) {
+            return {
+              postId,
+              name,
+              handle,
+              bodySnippet: body.slice(0, 35)
+            };
+          }
+        }
+        return null;
+      }, myBotUser, keyword);
+
+      if (botPostInfo) break;
+      console.log(`BOT投稿の検出を再試行中 (${retry + 1}/5)...`);
+      await page.evaluate(() => window.scrollBy(0, 100));
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    const botPostId = botPostInfo?.postId || null;
+    if (botPostInfo) {
+      console.log(`[基準BOT投稿番号を確定] #${botPostId} (投稿者: ${botPostInfo.name || 'シュガー'} / 本文: "${botPostInfo.bodySnippet}...")`);
+    } else {
+      console.log("⚠️ BOT投稿の固有IDが自動検出できませんでした。以降の最新投稿を全件走査します。");
+    }
+
+    // タイピング選手権の場合：制限時間5分(300秒)で審査！
     if (isEventHour && keyword) {
       console.log("--------------------------------------------------");
-      console.log(`[イベント開始] 制限時間: 5分間 (お題キーワード: 『${keyword}』)`);
-      console.log(`※お題投稿(#${botPostId || '基準'})以降の投稿で、キーワードが含まれるコメントのみを審査します。`);
+      console.log(`[イベント開始] 制限時間: 5分間 (お題キーワード: 『${keyword}』 / 賞金: ${eventCoins}コイン)`);
+      if (botPostId) {
+        console.log(`※お題投稿(#${botPostId})より後の新しい投稿で、キーワード『${keyword}』を含むコメントを審査します。`);
+      } else {
+        console.log(`※これ以降の新しい投稿で、キーワード『${keyword}』を含むコメントを審査します。`);
+      }
       console.log("--------------------------------------------------");
 
-      const botHandle = (process.env.SNS_USER || '').replace(/^@/, '').trim();
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000;
-      
+      const competitionDurationMs = 5 * 60 * 1000; // 5分間
       const qualifiedSubmissions = new Map();
 
       while (Date.now() - startTime < competitionDurationMs) {
@@ -429,15 +402,22 @@ async function executeBotPost(retryCount = 0) {
           const results = [];
           const articles = Array.from(document.querySelectorAll('article.post, .post'));
 
-          // キーワード正規化（スペース・改行を除去した小文字）
-          const normKey = targetKeyword.replace(/[\s\r\n\t]/g, '').toLowerCase();
+          const normKey = targetKeyword.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
           articles.forEach((art, index) => {
+            // 「✨ 注目」ピン留め投稿は除外
+            const isFeatured = 
+              art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
+              art.querySelector('.hl-tag') !== null ||
+              (art.innerHTML && art.innerHTML.includes('hl-tag'));
+
+            if (isFeatured) return;
+
             const bodyEl = art.querySelector('.post-body');
             const bodyText = (bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '').trim();
-            const normBody = bodyText.replace(/[\s\r\n\t]/g, '').toLowerCase();
+            const normBody = bodyText.replace(/[\s\r\n\t　]/g, '').toLowerCase();
 
-            // 「その単語が入ってたらいい（部分一致）」の判定
+            // 「その単語が入ってたらいい（部分一致）」判定
             if (normBody.includes(normKey)) {
               const handleEl = art.querySelector('.post-handle');
               const nameEl = art.querySelector('.post-name');
@@ -449,13 +429,10 @@ async function executeBotPost(retryCount = 0) {
               const postId = rawId ? parseInt(rawId, 10) : null;
               handle = handle.replace(/^@/, '').trim();
 
-              // 判定条件:
-              // 1. 自分のBOTではない
-              // 2. BOT自身のアナウンスではない
-              // 3. お題投稿番号より大きい（お題投稿後の新しいコメントであること）
               const isAfterBot = (!basePostId || !postId || postId > basePostId);
+              const isNotMe = handle.toLowerCase() !== myBotHandle.toLowerCase() && !name.includes('シュガー');
 
-              if (handle && handle !== myBotHandle && !bodyText.includes('【全国アナウンス（BOT）】') && isAfterBot) {
+              if (handle && isNotMe && !bodyText.includes('【全国アナウンス（BOT）】') && isAfterBot) {
                 results.push({
                   handle,
                   name,
@@ -468,7 +445,7 @@ async function executeBotPost(retryCount = 0) {
             }
           });
           return results;
-        }, keyword, botHandle, botPostId);
+        }, keyword, myBotUser, botPostId);
 
         for (const item of foundList) {
           if (!qualifiedSubmissions.has(item.handle)) {
@@ -500,57 +477,98 @@ async function executeBotPost(retryCount = 0) {
 
       let winner = null;
       if (qualifiedSubmissions.size > 0) {
-        // 投稿番号(postId)が最も小さい人（物理的に最速投稿した人）、または最も早く検知された人を1位とする
+        // 最も投稿番号が小さい人（物理的に最速で投稿した人）を1位とする
         const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
           if (a.postId && b.postId) return a.postId - b.postId;
           return a.discoveredAt - b.discoveredAt;
         });
         winner = sorted[0];
-        const winnerDiffMsg = winner.diff ? (' (BOT投稿から +' + winner.diff + ' 番目のコメント)') : '';
-        console.log(`[審査結果: 1位確定] 最速正解者は @${winner.handle} さんです！(#${winner.postId || ''}${winnerDiffMsg})`);
+        console.log(`[最速1位確定] @${winner.handle} さん (#${winner.postId || 'IDなし'} - ${winner.name})`);
       } else {
         console.log("[審査結果] 制限時間内に正解者の投稿はありませんでした。");
       }
-      console.log("--------------------------------------------------");
 
+      // 送金処理 ＆ 優勝者発表
       if (winner) {
-        await sendCoinsToWinner(page, winner.handle, 25);
+        console.log(`優勝者の @${winner.handle} さんへ${eventCoins}コインを送金します...`);
+        try {
+          await page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a, button, span'));
+            const el = links.find(l => (l.innerText || l.textContent || '').trim() === '国家');
+            if (el) el.click();
+          });
+          await new Promise(r => setTimeout(r, 2000));
 
+          await page.evaluate(() => {
+            const elements = Array.from(document.querySelectorAll('.t-lbl, span, a, button'));
+            const el = elements.find(s => (s.innerText || s.textContent || '').trim() === '経済');
+            if (el) el.click();
+          });
+          await new Promise(r => setTimeout(r, 2000));
+
+          await page.waitForSelector('#send', { timeout: 10000 });
+          await page.click('#send');
+          await new Promise(r => setTimeout(r, 1500));
+
+          await page.waitForSelector('#mf-h', { timeout: 10000 });
+          await page.type('#mf-h', winner.handle, { delay: 30 });
+
+          await page.waitForSelector('#mf-a', { timeout: 10000 });
+          await page.type('#mf-a', String(eventCoins), { delay: 30 });
+
+          await page.waitForSelector('#mf-m', { timeout: 10000 });
+          await page.type('#mf-m', `タイピング選手権 優勝賞金 (${eventCoins}コイン)`, { delay: 30 });
+          await new Promise(r => setTimeout(r, 1500));
+
+          await page.evaluate(() => {
+            const submitBtns = Array.from(document.querySelectorAll('button'));
+            const sBtn = submitBtns.find(b => (b.innerText || '').includes('送金') || (b.innerText || '').includes('送信'));
+            if (sBtn) sBtn.click();
+          });
+          await new Promise(r => setTimeout(r, 3000));
+          console.log(`@${winner.handle} さんへの${eventCoins}コイン送金が正常完了しました！`);
+        } catch (transferErr) {
+          console.error("送金処理中にエラーが発生しました:", transferErr.message);
+        }
+
+        // ホームに戻って優勝者発表メッセージを自動投稿
         try {
           console.log("優勝者発表メッセージを投稿中...");
-          await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
+          await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2" });
           await new Promise(r => setTimeout(r, 2000));
-          await page.waitForSelector('#c-body', { timeout: 10000 });
 
           const winnerDisplayName = winner.name ? (' (' + winner.name + ')') : '';
-          const resultMsg = `【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金25コインを送金しました。\n明日もお楽しみに！\n#全国アナウンスBOT`;
-          
+          const resultMsg = `【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金${eventCoins}コインを送金しました。\n次回のイベントもお楽しみに！\n#全国アナウンスBOT`;
+
+          await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', resultMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
+          await new Promise(r => setTimeout(r, 4000));
           console.log("優勝者発表メッセージの投稿完了！");
-          console.log(resultMsg);
-          await new Promise(r => setTimeout(r, 3000));
-        } catch (e) {
-          console.warn("優勝者発表投稿で軽微なエラー:", e.message);
+        } catch (announceErr) {
+          console.error("優勝発表メッセージ投稿中にエラー:", announceErr.message);
         }
       } else {
         try {
-          await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
+          console.log("正解者なしメッセージを投稿中...");
+          await page.goto("https://national-sns.vercel.app/", { waitUntil: "networkidle2" });
           await new Promise(r => setTimeout(r, 2000));
-          await page.waitForSelector('#c-body', { timeout: 10000 });
-          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のイベント結果発表\n制限時間5分の中で正解者の投稿はありませんでした。\nまた明日のご参加をお待ちしています！\n#全国アナウンスBOT";
+
+          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
+          await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', noWinnerMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
+          await new Promise(r => setTimeout(r, 4000));
           console.log("正解者なしメッセージの投稿完了！");
-        } catch (e) {}
+        } catch (noWinErr) {
+          console.error("正解者なし投稿中にエラー:", noWinErr.message);
+        }
       }
     }
 
     console.log("すべての処理が正常に完了しました！");
-    await page.screenshot({ path: 'success-result.png', fullPage: true }).catch(() => {});
-
   } catch (error) {
     console.error(`エラー発生 (試行 ${retryCount + 1}): `, error.message);
     await page.screenshot({ path: `error-debug-${retryCount + 1}.png`, fullPage: true }).catch(() => {});
