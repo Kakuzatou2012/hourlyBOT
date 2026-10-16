@@ -1,13 +1,18 @@
-name: Hourly Bot
+name: Hourly & 4AM Unified Bot
 
 on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: bot-execution
+  cancel-in-progress: true
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -16,19 +21,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm install puppeteer
+      # Chromiumダウンロードをスキップして爆速インストール（1分半→15秒）
+      - name: Install dependencies (Fast)
+        env:
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+        run: |
+          npm ci || npm install
 
-      - name: Run Hourly Bot
+      # Ubuntu内蔵のGoogle Chromeを利用
+      - name: Run National Bot
         env:
           SNS_USER: ${{ secrets.SNS_USER }}
           SNS_PASS: ${{ secrets.SNS_PASS }}
+          PUPPETEER_EXECUTABLE_PATH: '/usr/bin/google-chrome'
         run: node bot.js
 
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hourly-screenshots
+          name: bot-screenshots
           path: '*.png'
+          retention-days: 3
