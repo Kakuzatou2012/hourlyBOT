@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v4.0 - 5分間審査システム ＆ 毎日18時25コイン対応)
+ * 統合版 全国アナウンスBOT (v4.6 - 直近3名確認 ＆ 5分遅延許容 ＆ 本日のイベント優勝者発表)
  */
 
 const KEYWORDS = [
@@ -112,8 +112,9 @@ async function executeBotPost(retryCount = 0) {
   const jstHours = jstDate.getHours();
   const jstMinutes = jstDate.getMinutes();
 
+  // 遅延許容を5分までに設定
   const isForcePost = (process.env.FORCE_POST === 'true');
-  const isDryRun = (jstMinutes > 10) && !isForcePost;
+  const isDryRun = (jstMinutes > 5) && !isForcePost;
 
   // 毎日18時(午後6時)がタイピング大会開催時間 (手動FORCE_POST時も対象)
   const isEventHour = (jstHours === 18) || isForcePost;
@@ -124,11 +125,11 @@ async function executeBotPost(retryCount = 0) {
   if (isDryRun) {
     console.log("--------------------------------------------------");
     console.log("[安全テストモード (Dry Run)]");
-    console.log(`現在は ${jstHours}時${jstMinutes}分 のため、実際の確定ボタンは押さずに`);
-    console.log("入力完了直前の全画面スクリーンショットを撮影して検証します。");
+    console.log(`現在は ${jstHours}時${jstMinutes}分 (5分を超過) のため、実際の確定ボタンは押さずに`);
+    console.log("タイムライン解析 ＆ 全画面スクリーンショットを撮影して検証します。");
     console.log("--------------------------------------------------");
   } else {
-    console.log("[本番実行モード] 定時実行として投稿処理を開始します。");
+    console.log(`[本番実行モード] 定時実行 (現在: ${jstMinutes}分 / 5分以内) として処理を開始します。`);
     if (isEventHour) {
       console.log("★ 毎日18時: タイピング選手権 (賞金25コイン / 制限時間5分審査) が開催されます！");
     }
@@ -215,6 +216,49 @@ async function executeBotPost(retryCount = 0) {
     await page.screenshot({ path: '1-login-success.png', fullPage: true });
     console.log("[スクショ1保存] 1-login-success.png");
 
+    // 直近1〜3番目のユーザー情報を取得・出力
+    console.log("==================================================");
+    console.log("【タイムライン確認テスト】直近3件の投稿を解析中...");
+    const recentPosts = await page.evaluate(() => {
+      const posts = [];
+      const bodyElements = Array.from(document.querySelectorAll('.post-body, div.post-body'));
+
+      for (const bodyEl of bodyElements) {
+        if (posts.length >= 3) break;
+        const container = bodyEl.closest('.post, article, div') || bodyEl.parentElement;
+        const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
+        const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
+
+        const handle = (handleEl ? (handleEl.innerText || handleEl.textContent || '') : '').replace(/^@/, '').trim();
+        const name = (nameEl ? (nameEl.innerText || nameEl.textContent || '') : '').trim();
+        const text = (bodyEl.innerText || bodyEl.textContent || '').trim();
+
+        if (text) {
+          posts.push({
+            handle: handle || '（ハンドルなし）',
+            name: name || '（表示名なし）',
+            comment: text
+          });
+        }
+      }
+      return posts;
+    });
+
+    if (recentPosts.length === 0) {
+      console.log("⚠️ タイムライン上に投稿が見つかりませんでした。");
+    } else {
+      recentPosts.forEach((p, idx) => {
+        console.log(`--------------------------------------------------`);
+        console.log(`[直近投稿 第${idx + 1}位]`);
+        console.log(`  ユーザー名: @${p.handle}`);
+        console.log(`  名前:       ${p.name}`);
+        console.log(`  コメント:   "${p.comment}"`);
+      });
+      console.log(`--------------------------------------------------`);
+      console.log(`合計 ${recentPosts.length} 件の直近ユーザー情報を正常に確認・出力しました！`);
+    }
+    console.log("==================================================");
+
     // 3. アナウンスメッセージ入力
     console.log("3. メッセージを入力中...");
     await page.waitForSelector('#c-body', { timeout: 15000 });
@@ -238,7 +282,7 @@ async function executeBotPost(retryCount = 0) {
     await page.screenshot({ path: '2-post-before-submit.png', fullPage: true });
     console.log("[スクショ2保存] 2-post-before-submit.png (投稿直前)");
 
-    // 【A. 安全テストモードの場合】
+    // 【A. 安全テストモードの場合（遅延5分超過 または 手動テスト時）】
     if (isDryRun) {
       console.log("[テスト中] 投稿ボタンは押さずに送金画面の検証へ進みます...");
 
@@ -263,28 +307,36 @@ async function executeBotPost(retryCount = 0) {
       await page.click('#send');
       await new Promise(r => setTimeout(r, 1500));
 
+      const testRecipient = (recentPosts[0] && recentPosts[0].handle && recentPosts[0].handle !== '（ハンドルなし）')
+        ? recentPosts[0].handle
+        : (process.env.SNS_USER || 'sample_user');
+
       await page.waitForSelector('#mf-h', { timeout: 10000 });
-      await page.type('#mf-h', (process.env.SNS_USER || 'sample_user'), { delay: 30 });
+      await page.type('#mf-h', testRecipient, { delay: 30 });
 
       await page.waitForSelector('#mf-a', { timeout: 10000 });
-      await page.type('#mf-a', '25', { delay: 30 }); // 25コイン
+      await page.type('#mf-a', '25', { delay: 30 });
 
       await page.waitForSelector('#mf-m', { timeout: 10000 });
       await page.type('#mf-m', 'タイピング選手権 優勝賞金 (25コイン)', { delay: 30 });
       await new Promise(r => setTimeout(r, 1500));
 
       await page.screenshot({ path: '4-coin-modal-ready.png', fullPage: true });
-      console.log("[スクショ4保存] 4-coin-modal-ready.png (送金直前)");
+      console.log(`[スクショ4保存] 4-coin-modal-ready.png (@${testRecipient} 宛て25コイン送金直前)`);
 
       console.log("==================================================");
-      console.log("【テスト大成功】全画面の操作・入力が正常完了しました！");
-      console.log("送金金額は 25コイン に設定されています。");
-      console.log("Actionsの Artifacts (bot-screenshots) から4枚の画像を確認できます。");
+      console.log("【テスト大成功】全画面の操作・直近ユーザー確認が正常完了しました！");
+      console.log(`送金先テスト相手: @${testRecipient} (金額: 25コイン)`);
+      console.log("--------------------------------------------------");
+      console.log("[5分後に投稿される優勝者メッセージの見本]:");
+      console.log(`【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${testRecipient} さんでした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金25コインを送金しました。\n明日もお楽しみに！\n#全国アナウンスBOT`);
+      console.log("--------------------------------------------------");
+      console.log("Actionsのログにて直近1〜3位の投稿内容と、Artifactsの4枚の画像を確認できます。");
       console.log("==================================================");
       return;
     }
 
-    // 【B. 本番モードの場合】
+    // 【B. 本番モードの場合（毎時0〜5分以内）】
     console.log("アナウンスを投稿します...");
     await clickPostButton(page);
     await new Promise(r => setTimeout(r, 4000));
@@ -299,7 +351,7 @@ async function executeBotPost(retryCount = 0) {
 
       const botHandle = (process.env.SNS_USER || '').replace(/^@/, '').trim();
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000; // 5分間 (300,000ms)
+      const competitionDurationMs = 5 * 60 * 1000;
       
       const qualifiedSubmissions = new Map();
 
@@ -319,8 +371,8 @@ async function executeBotPost(retryCount = 0) {
               const handleEl = container ? container.querySelector('.post-handle, a.post-handle') : null;
               const nameEl = container ? container.querySelector('.post-name, a.post-name') : null;
 
-              let handle = handleEl ? (handleEl.innerText || handleEl.textContent || '').trim() : '';
-              const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
+              let handle = handleEl ? (handleEl.innerText || handleEl.textContent || '') : '';
+              const name = nameEl ? (nameEl.innerText || nameEl.textContent || '') : '';
               handle = handle.replace(/^@/, '').trim();
 
               if (handle && handle !== myBotHandle && !bodyText.includes('【全国アナウンス（BOT）】')) {
@@ -372,29 +424,34 @@ async function executeBotPost(retryCount = 0) {
         await sendCoinsToWinner(page, winner.handle, 25);
 
         try {
-          console.log("結果発表メッセージを投稿中...");
+          console.log("優勝者発表メッセージを投稿中...");
           await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
           await new Promise(r => setTimeout(r, 2000));
           await page.waitForSelector('#c-body', { timeout: 10000 });
 
-          const resultMsg = `【結果発表】\nデイリータイピング選手権の審査が完了しました。\n制限時間5分の中で、最速正解者は\n@${winner.handle} さんでした！\n\n優勝賞金25コインを送金しました。\nご参加ありがとうございました！\n#全国アナウンスBOT`;
+          // ★「本日のイベント優勝者は〜」のフォーマット
+          const winnerDisplayName = winner.name ? (' (' + winner.name + ')') : '';
+          const resultMsg = `【全国アナウンス（BOT）】\n本日のイベント優勝者は\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n優勝賞金25コインを送金しました。\n明日もお楽しみに！\n#全国アナウンスBOT`;
+          
           await page.type('#c-body', resultMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
-          console.log("結果発表の投稿完了！");
+          console.log("優勝者発表メッセージの投稿完了！");
+          console.log(resultMsg);
           await new Promise(r => setTimeout(r, 3000));
         } catch (e) {
-          console.warn("結果発表投稿で軽微なエラー:", e.message);
+          console.warn("優勝者発表投稿で軽微なエラー:", e.message);
         }
       } else {
         try {
           await page.goto('https://national-sns.vercel.app', { waitUntil: 'networkidle2' });
           await new Promise(r => setTimeout(r, 2000));
           await page.waitForSelector('#c-body', { timeout: 10000 });
-          const noWinnerMsg = "【結果発表】\nデイリータイピング選手権（制限時間5分）\n今回は正解者の投稿がありませんでした。\nまた次回のご参加をお待ちしています！\n#全国アナウンスBOT";
+          const noWinnerMsg = "【全国アナウンス（BOT）】\n本日のイベント結果発表\n制限時間5分の中で正解者の投稿はありませんでした。\nまた明日のご参加をお待ちしています！\n#全国アナウンスBOT";
           await page.type('#c-body', noWinnerMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
+          console.log("正解者なしメッセージの投稿完了！");
         } catch (e) {}
       }
     }
