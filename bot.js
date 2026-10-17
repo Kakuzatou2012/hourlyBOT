@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.2)
+ * 統合版 全国アナウンスBOT (v5.3)
  */
 
 const KEYWORDS = [
@@ -161,14 +161,13 @@ async function executeBotPost(retryCount = 0) {
     const rawMode = (process.env.MODE || process.env.INPUT_MODE || '').trim().toLowerCase();
     const isGitHubManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
 
-    // 手動フラグ（明確に手動実行が選ばれた場合のみtrue）
-    const isManualEvent = 
+    // 手動イベントや特定モードの判定
+    const isExplicitEvent = 
       isGitHubManual ||
+      rawMode === 'event_now' ||
       args.includes('--manual') ||
       args.includes('--event-now') ||
       args.includes('event') ||
-      rawMode === 'event_now' ||
-      rawMode === 'manual' ||
       process.env.EVENT_NOW === 'true' ||
       process.env.MANUAL === 'true';
 
@@ -178,10 +177,12 @@ async function executeBotPost(retryCount = 0) {
     const customKeyword = (process.env.CUSTOM_KEYWORD || '').trim();
     const eventCoins = parseInt(process.env.CUSTOM_COINS || '25', 10) || 25;
 
-    // 午後6時(18時)にイベントが起動するように設定
-    const isScheduledEvent = (jstHour === 18);
+    // autoモードのときは18時のみ、手動のときは明示的にイベントモードにする
+    const isScheduledEvent = (rawMode === 'auto' && jstHour === 18);
+    const isManualEvent = isExplicitEvent && rawMode !== 'auto';
+    
     const isEventHour = isManualEvent || isScheduledEvent;
-    const isMorningBot = (jstHour === 4) && !isManualEvent;
+    const isMorningBot = (jstHour === 4) && !isEventHour;
 
     const keyword = isEventHour ? (customKeyword || getRandomKeyword()) : null;
     const message = createPostMessage(jstHour, keyword, isManualEvent, eventCoins);
@@ -360,7 +361,7 @@ async function executeBotPost(retryCount = 0) {
       console.log("⚠️ 基準BOT投稿IDが自動検出できなかったため、最新の投稿から走査します。");
     }
 
-    // イベント中の5分間審査処理（コメント取得の安定性を大幅に強化）
+    // イベント中の5分間審査処理
     if (isEventHour && keyword) {
       console.log(`[イベント審査開始] お題: 『${keyword}』 (制限時間5分)`);
 
