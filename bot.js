@@ -63,59 +63,100 @@ async function clickPostButton(page) {
 
 // 送金処理を確実に行うためのヘルパー関数
 async function sendCoinsToUser(page, recipientHandle, amount, memo) {
-  console.log(`@${recipientHandle} さんへ ${amount} コインの送金画面へ移動中...`);
+  const cleanHandle = (recipientHandle || '').replace(/^@/, '').trim();
+  console.log(`@${cleanHandle} さんへ ${amount} コインの送金画面へ移動中...`);
   
   // 国家タブを開く
   await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a, button, span'));
+    const links = Array.from(document.querySelectorAll('a, button, span, .nav-link, .tab'));
     const el = links.find(l => (l.innerText || l.textContent || '').trim() === '国家');
-    if (el) el.click();
+    if (el) {
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+        el.dispatchEvent(new PointerEvent(evt, { bubbles: true, cancelable: true, view: window }));
+      });
+    }
   });
   await new Promise(r => setTimeout(r, 2500));
 
   // 経済タブを開く
   await page.evaluate(() => {
-    const elements = Array.from(document.querySelectorAll('.t-lbl, span, a, button'));
+    const elements = Array.from(document.querySelectorAll('.t-lbl, span, a, button, .nav-link, .tab'));
     const el = elements.find(s => (s.innerText || s.textContent || '').trim() === '経済');
-    if (el) el.click();
+    if (el) {
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+        el.dispatchEvent(new PointerEvent(evt, { bubbles: true, cancelable: true, view: window }));
+      });
+    }
   });
   await new Promise(r => setTimeout(r, 2500));
 
-  // 送金ボタンを押す
+  // 送金モーダルを開くボタンを押す
   await page.waitForSelector('#send', { timeout: 15000 });
   await page.click('#send');
   await new Promise(r => setTimeout(r, 2000));
 
-  // 宛先入力
+  // 宛先入力 (#mf-h)
   await page.waitForSelector('#mf-h', { timeout: 15000 });
   await page.click('#mf-h', { clickCount: 3 });
   await page.keyboard.press('Backspace');
-  await page.type('#mf-h', recipientHandle, { delay: 40 });
+  await page.type('#mf-h', cleanHandle, { delay: 40 });
+  await page.evaluate(() => {
+    const el = document.querySelector('#mf-h');
+    if (el) {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
 
-  // 金額入力
+  // 金額入力 (#mf-a)
   await page.waitForSelector('#mf-a', { timeout: 15000 });
   await page.click('#mf-a', { clickCount: 3 });
   await page.keyboard.press('Backspace');
   await page.type('#mf-a', String(amount), { delay: 40 });
+  await page.evaluate(() => {
+    const el = document.querySelector('#mf-a');
+    if (el) {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
 
-  // メモ入力
+  // メモ入力 (#mf-m)
   await page.waitForSelector('#mf-m', { timeout: 15000 });
   await page.click('#mf-m', { clickCount: 3 });
   await page.keyboard.press('Backspace');
   await page.type('#mf-m', memo, { delay: 40 });
+  await page.evaluate(() => {
+    const el = document.querySelector('#mf-m');
+    if (el) {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
   await new Promise(r => setTimeout(r, 2000));
 
-  // 実行ボタンの確実なクリック
+  await page.screenshot({ path: '3-remittance-filled.png', fullPage: true }).catch(() => {});
+
+  // フォーム内の実行ボタンを確実に特定してクリック（モーダルを開く #send ボタンを除外）
   const clicked = await page.evaluate(() => {
-    const submitBtns = Array.from(document.querySelectorAll('button'));
-    const sBtn = submitBtns.find(b => {
-      const t = (b.innerText || b.textContent || '').trim();
-      return t.includes('送金') || t.includes('送信') || t.includes('実行');
-    });
+    const handleInput = document.querySelector('#mf-h');
+    const container = handleInput ? handleInput.closest('form, .modal, .modal-content, div') : document;
+    const btns = Array.from((container || document).querySelectorAll('button, input[type="submit"], input[type="button"]'));
+
+    // #send 以外のボタンで、送金/送信/実行/Submitテキストを持つものを優先
+    const sBtn = btns.find(b => {
+      if (b.id === 'send') return false;
+      const t = (b.innerText || b.textContent || b.value || '').trim();
+      return t.includes('送金') || t.includes('送信') || t.includes('実行') || b.type === 'submit';
+    }) || btns.find(b => b.id !== 'send');
+
     if (sBtn) {
       ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
         sBtn.dispatchEvent(new PointerEvent(evt, { bubbles: true, cancelable: true, view: window }));
       });
+      if (sBtn.form) {
+        sBtn.form.requestSubmit ? sBtn.form.requestSubmit() : sBtn.form.submit();
+      }
       return true;
     }
     return false;
@@ -126,7 +167,8 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo) {
   }
 
   await new Promise(r => setTimeout(r, 4000));
-  console.log(`@${recipientHandle} さんへの ${amount} コインの送金処理が完了しました！`);
+  await page.screenshot({ path: '4-remittance-done.png', fullPage: true }).catch(() => {});
+  console.log(`@${cleanHandle} さんへの ${amount} コインの送金処理が完了しました！`);
 }
 
 async function executeBotPost(retryCount = 0) {
