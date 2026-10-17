@@ -61,10 +61,11 @@ async function clickPostButton(page) {
   });
 }
 
-// 送金処理を確実に行うためのヘルパー関数
-async function sendCoinsToUser(page, recipientHandle, amount, memo) {
+// 送金処理を確実に行うためのヘルパー関数 (dryRunOptions: { isDryRun: boolean })
+async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOptions = { isDryRun: false }) {
+  const isDryRun = !!dryRunOptions?.isDryRun;
   const cleanHandle = (recipientHandle || '').replace(/^@/, '').trim();
-  console.log(`@${cleanHandle} さんへ ${amount} コインの送金画面へ移動中...`);
+  console.log(`@${cleanHandle} さんへ ${amount} コインの送金画面へ移動中... ${isDryRun ? '(テスト・DryRunモード)' : ''}`);
   
   // 国家タブを開く
   await page.evaluate(() => {
@@ -136,6 +137,12 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo) {
   await new Promise(r => setTimeout(r, 2000));
 
   await page.screenshot({ path: '3-remittance-filled.png', fullPage: true }).catch(() => {});
+  console.log(`[送金画面準備完了] @${cleanHandle} さんへの入力が完了しスクショ(3-remittance-filled.png)を保存しました。`);
+
+  if (isDryRun) {
+    console.log("[Dry Run モードのため送金実行ボタンは押さずに終了します]");
+    return;
+  }
 
   // フォーム内の実行ボタンを確実に特定してクリック（モーダルを開く #send ボタンを除外）
   const clicked = await page.evaluate(() => {
@@ -343,7 +350,35 @@ async function executeBotPost(retryCount = 0) {
     await page.screenshot({ path: '2-post-before-submit.png', fullPage: true });
 
     if (isDryRun) {
-      console.log("[Dry Run 終了]");
+      console.log("[Dry Run モード (テストモード)] 一番上のユーザーを取得して送金画面手前までテスト実行します...");
+      const topUserHandle = await page.evaluate((myBotUser) => {
+        const articles = Array.from(document.querySelectorAll('article.post, .post'));
+        for (const art of articles) {
+          const isFeatured =
+            art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
+            art.querySelector('.hl-tag') !== null;
+          if (isFeatured) continue;
+
+          const handleEl = art.querySelector('.post-handle');
+          const nameEl = art.querySelector('.post-name');
+          const bodyEl = art.querySelector('.post-body');
+
+          const handle = handleEl ? (handleEl.innerText || handleEl.textContent || '').replace(/^@/, '').trim() : '';
+          const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
+          const body = bodyEl ? (bodyEl.innerText || bodyEl.textContent || '').trim() : '';
+
+          const isMe = handle.toLowerCase() === myBotUser.toLowerCase() || name.includes('シュガー') || body.includes('【全国アナウンス（BOT）】');
+          if (handle && !isMe) {
+            return handle;
+          }
+        }
+        return null;
+      }, myBotUser);
+
+      const testRecipient = topUserHandle || 'test_user';
+      console.log(`[Dry Run テスト対象宛先] @${testRecipient}`);
+      await sendCoinsToUser(page, testRecipient, eventCoins, `タイピング選手権 優勝賞金 (テスト)`, { isDryRun: true });
+      console.log("[Dry Run 正常完了]");
       return;
     }
 
@@ -403,12 +438,12 @@ async function executeBotPost(retryCount = 0) {
       console.log("⚠️ 基準BOT投稿IDが自動検出できなかったため、最新の投稿から走査します。");
     }
 
-    // イベント中の5分間審査処理
+    // イベント中の5分間審査処理 (投稿後5分間タイマーで正解者を監視し、5分経過後に優勝者へ送金)
     if (isEventHour && keyword) {
-      console.log(`[イベント審査開始] お題: 『${keyword}』 (制限時間5分)`);
+      console.log(`[イベント審査開始] お題: 『${keyword}』 (投稿から5分間/300秒経過後に送金処理を実施します)`);
 
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000;
+      const competitionDurationMs = 5 * 60 * 1000; // 5分間 (300,000ミリ秒) 待機＆スキャン
       const qualifiedSubmissions = new Map();
       let scanCycle = 0;
 
