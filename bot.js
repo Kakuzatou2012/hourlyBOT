@@ -67,32 +67,41 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
   const cleanHandle = (recipientHandle || '').replace(/^@/, '').trim();
   console.log(`@${cleanHandle} さんへ ${amount} コインの送金画面へ移動中... ${isDryRun ? '(テスト・DryRunモード)' : ''}`);
   
-  // 国家タブを開く
-  await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a, button, span, .nav-link, .tab'));
-    const el = links.find(l => (l.innerText || l.textContent || '').trim() === '国家');
-    if (el) {
-      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
-        el.dispatchEvent(new PointerEvent(evt, { bubbles: true, cancelable: true, view: window }));
-      });
-    }
-  });
-  await new Promise(r => setTimeout(r, 2500));
+  // チュートリアルポップアップが表示されている場合はスキップ
+  const skipBtn = await page.$('.btn-skip, button.skip, #btn-skip, [data-t="skip"]');
+  if (skipBtn) {
+    await skipBtn.click().catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+  }
 
-  // 経済タブを開く
-  await page.evaluate(() => {
-    const elements = Array.from(document.querySelectorAll('.t-lbl, span, a, button, .nav-link, .tab'));
-    const el = elements.find(s => (s.innerText || s.textContent || '').trim() === '経済');
-    if (el) {
-      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
-        el.dispatchEvent(new PointerEvent(evt, { bubbles: true, cancelable: true, view: window }));
-      });
+  // 国家・経済タブへダイレクト遷移
+  console.log("国家/経済ページ (/#/nation/rich) へ遷移中...");
+  await page.goto("https://national-sns.vercel.app/#/nation/rich", { waitUntil: "networkidle2", timeout: 30000 });
+  await new Promise(r => setTimeout(r, 2000));
+
+  // 経済タブの送金ボタン (#send) の表示を確認。万が一表示されない場合はフォールバック
+  let sendBtnFound = false;
+  for (let i = 0; i < 3; i++) {
+    const sendBtn = await page.$('#send');
+    if (sendBtn) {
+      sendBtnFound = true;
+      break;
     }
-  });
-  await new Promise(r => setTimeout(r, 2500));
+    // タブクリックでフォールバック
+    await page.evaluate(() => {
+      const econLink = Array.from(document.querySelectorAll('a, button, span, .tab')).find(l => (l.innerText || l.textContent || '').trim() === '経済');
+      if (econLink) econLink.click();
+    });
+    await new Promise(r => setTimeout(r, 2000));
+  }
+
+  if (!sendBtnFound) {
+    // 画面状態デバッグ用のスクショを保存して例外送出
+    await page.screenshot({ path: 'error-send-button-not-found.png', fullPage: true }).catch(() => {});
+    throw new Error("国家/経済タブの「コインを送る」ボタン (#send) が見つかりませんでした。");
+  }
 
   // 送金モーダルを開くボタンを押す
-  await page.waitForSelector('#send', { timeout: 15000 });
   await page.click('#send');
   await new Promise(r => setTimeout(r, 2000));
 
@@ -149,7 +158,7 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
     const handleInput = document.querySelector('#mf-h');
     const container = handleInput ? handleInput.closest('form, .modal, .modal-content, div') : document;
     const btns = Array.from((container || document).querySelectorAll('button, input[type="submit"], input[type="button"]'));
-
+    
     // #send 以外のボタンで、送金/送信/実行/Submitテキストを持つものを優先
     const sBtn = btns.find(b => {
       if (b.id === 'send') return false;
@@ -354,7 +363,7 @@ async function executeBotPost(retryCount = 0) {
       const topUserHandle = await page.evaluate((myBotUser) => {
         const articles = Array.from(document.querySelectorAll('article.post, .post'));
         for (const art of articles) {
-          const isFeatured =
+          const isFeatured = 
             art.closest('#v11-pinwrap, #v11-pinned, .v14-hl-head, .v14-hl-body') !== null ||
             art.querySelector('.hl-tag') !== null;
           if (isFeatured) continue;
