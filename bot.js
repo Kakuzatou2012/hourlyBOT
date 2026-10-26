@@ -92,12 +92,16 @@ function createPostMessage(hour, keyword, isManualEvent, coins) {
   return `【全国アナウンス（BOT）】\n${hour}時になりました。\n#全国アナウンスBOT`;
 }
 
-async function clickPostButton(page) {
-  // 投稿ボタンをクリックする前に、本文テキストエリアに文字が入っていることを確認
-  await page.waitForFunction(() => {
+async function clickPostButton(page, expectedMessage = '') {
+  // 投稿ボタンをクリックする前に、本文テキストエリアに予定メッセージ全体が完全に入力されていることを確認
+  await page.waitForFunction((expected) => {
     const textarea = document.querySelector('#c-body');
-    return textarea && textarea.value && textarea.value.trim().length > 0;
-  }, { timeout: 15000 });
+    if (!textarea || !textarea.value) return false;
+    if (expected) {
+      return textarea.value.trim() === expected.trim();
+    }
+    return textarea.value.trim().length > 0;
+  }, { timeout: 15000 }, expectedMessage);
 
   // 入力反映を待つための安全な待ち時間
   await new Promise(r => setTimeout(r, 1500));
@@ -118,6 +122,15 @@ async function clickPostButton(page) {
         ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
           btn.dispatchEvent(new PointerEvent(evt, { bubbles: true, cancelable: true, view: window }));
         });
+        if (btn.form) {
+          if (btn.form.requestSubmit) {
+            btn.form.requestSubmit();
+          } else {
+            btn.form.submit();
+          }
+        } else {
+          btn.click();
+        }
         return;
       }
     }
@@ -303,7 +316,7 @@ async function executeBotPost(retryCount = 0) {
     const isManualEvent = isExplicitEvent && rawMode !== 'auto';
     
     const isEventHour = isManualEvent || isScheduledEvent;
-    const isMorningBot = (jstHour === 4) && !isEventHour;
+    const isMorningBot = (jstHour === 4);
 
     const keyword = isEventHour ? (customKeyword || getRandomKeyword()) : null;
     const message = createPostMessage(jstHour, keyword, isManualEvent, eventCoins);
@@ -419,11 +432,22 @@ async function executeBotPost(retryCount = 0) {
     if (isMorningBot) {
       const imagePath = path.resolve('./george.jpg');
       if (fs.existsSync(imagePath)) {
-        const fileInput = await page.$('input[type="file"]');
+        console.log("朝4時投稿のため george.jpg を添付中...");
+        const fileInput = await page.$('#c-file') || await page.$('input[type="file"]');
         if (fileInput) {
           await fileInput.uploadFile(imagePath);
+          await page.evaluate(() => {
+            const fi = document.querySelector('#c-file') || document.querySelector('input[type="file"]');
+            if (fi) {
+              fi.dispatchEvent(new Event('change', { bubbles: true }));
+              fi.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          });
           await new Promise(r => setTimeout(r, 2000));
+          console.log("✓ 画像添付が完了しました。");
         }
+      } else {
+        console.warn("⚠️ george.jpg が見つかりませんでした。");
       }
     }
 
@@ -462,7 +486,7 @@ async function executeBotPost(retryCount = 0) {
       return;
     }
 
-    await clickPostButton(page);
+    await clickPostButton(page, message);
     console.log("アナウンス投稿完了！タイムラインの反映を待機中...");
     await new Promise(r => setTimeout(r, 4000));
 
@@ -694,7 +718,7 @@ async function executeBotPost(retryCount = 0) {
             }
           });
           await new Promise(r => setTimeout(r, 2000));
-          await clickPostButton(page);
+          await clickPostButton(page, resultMsg);
           await new Promise(r => setTimeout(r, 4000));
         } catch (announceErr) {
           console.error("優勝発表メッセージ投稿エラー:", announceErr.message);
@@ -711,7 +735,7 @@ async function executeBotPost(retryCount = 0) {
           await page.waitForSelector('#c-body', { timeout: 15000 });
           await page.type('#c-body', noWinnerMsg, { delay: 30 });
           await new Promise(r => setTimeout(r, 1000));
-          await clickPostButton(page);
+          await clickPostButton(page, noWinnerMsg);
           await new Promise(r => setTimeout(r, 4000));
         } catch (noWinErr) {
           console.error("正解者なし投稿エラー:", noWinErr.message);
