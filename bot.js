@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * 統合版 全国アナウンスBOT (v5.3)
+ * 統合版 全国アナウンスBOT (v5.4)
  */
 
 const KEYWORDS = [
@@ -56,7 +56,6 @@ function formatWinnerSummary() {
     return "【歴代タイピング選手権 優勝記録】\nまだ記録はありません。";
   }
 
-  // ユーザーごとの勝利数を集計
   const counts = new Map();
   for (const w of winners) {
     const key = w.handle;
@@ -92,14 +91,26 @@ function createPostMessage(hour, keyword, isManualEvent, coins) {
   return `【全国アナウンス（BOT）】\n${hour}時になりました。\n#全国アナウンスBOT`;
 }
 
+// テキストエリアへ一括で確実に文字を入力するヘルパー関数
+async function setPostText(page, text) {
+  await page.waitForSelector('#c-body', { timeout: 15000 });
+  await page.evaluate((content) => {
+    const textarea = document.querySelector('#c-body');
+    if (textarea) {
+      textarea.value = content;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }, text);
+  await new Promise(r => setTimeout(r, 1000));
+}
+
 async function clickPostButton(page) {
-  // 投稿ボタンをクリックする前に、本文テキストエリアに文字が入っていることを確認
   await page.waitForFunction(() => {
     const textarea = document.querySelector('#c-body');
     return textarea && textarea.value && textarea.value.trim().length > 0;
   }, { timeout: 15000 });
 
-  // 入力反映を待つための安全な待ち時間
   await new Promise(r => setTimeout(r, 1500));
 
   await page.waitForFunction(() => {
@@ -124,25 +135,21 @@ async function clickPostButton(page) {
   });
 }
 
-// 送金処理を確実に行うためのヘルパー関数 (dryRunOptions: { isDryRun: boolean })
 async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOptions = { isDryRun: false }) {
   const isDryRun = !!dryRunOptions?.isDryRun;
   const cleanHandle = (recipientHandle || '').replace(/^@/, '').trim();
   console.log(`@${cleanHandle} さんへ ${amount} コインの送金画面へ移動中... ${isDryRun ? '(テスト・DryRunモード)' : ''}`);
   
-  // チュートリアルポップアップが表示されている場合はスキップ
   const skipBtn = await page.$('.btn-skip, button.skip, #btn-skip, [data-t="skip"]');
   if (skipBtn) {
     await skipBtn.click().catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // 国家・経済タブへダイレクト遷移
   console.log("国家/経済ページ (/#/nation/rich) へ遷移中...");
   await page.goto("https://national-sns.vercel.app/#/nation/rich", { waitUntil: "networkidle2", timeout: 30000 });
   await new Promise(r => setTimeout(r, 2000));
 
-  // 経済タブの送金ボタン (#send) の表示を確認。万が一表示されない場合はフォールバック
   let sendBtnFound = false;
   for (let i = 0; i < 3; i++) {
     const sendBtn = await page.$('#send');
@@ -150,7 +157,6 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
       sendBtnFound = true;
       break;
     }
-    // タブクリックでフォールバック
     await page.evaluate(() => {
       const econLink = Array.from(document.querySelectorAll('a, button, span, .tab')).find(l => (l.innerText || l.textContent || '').trim() === '経済');
       if (econLink) econLink.click();
@@ -159,16 +165,13 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
   }
 
   if (!sendBtnFound) {
-    // 画面状態デバッグ用のスクショを保存して例外送出
     await page.screenshot({ path: 'error-send-button-not-found.png', fullPage: true }).catch(() => {});
     throw new Error("国家/経済タブの「コインを送る」ボタン (#send) が見つかりませんでした。");
   }
 
-  // 送金モーダルを開くボタンを押す
   await page.click('#send');
   await new Promise(r => setTimeout(r, 2000));
 
-  // 宛先入力 (#mf-h)
   await page.waitForSelector('#mf-h', { timeout: 15000 });
   await page.click('#mf-h', { clickCount: 3 });
   await page.keyboard.press('Backspace');
@@ -181,7 +184,6 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
     }
   });
 
-  // 金額入力 (#mf-a)
   await page.waitForSelector('#mf-a', { timeout: 15000 });
   await page.click('#mf-a', { clickCount: 3 });
   await page.keyboard.press('Backspace');
@@ -194,7 +196,6 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
     }
   });
 
-  // メモ入力 (#mf-m)
   await page.waitForSelector('#mf-m', { timeout: 15000 });
   await page.click('#mf-m', { clickCount: 3 });
   await page.keyboard.press('Backspace');
@@ -216,13 +217,11 @@ async function sendCoinsToUser(page, recipientHandle, amount, memo, dryRunOption
     return;
   }
 
-  // フォーム内の実行ボタンを確実に特定してクリック（モーダルを開く #send ボタンを除外）
   const clicked = await page.evaluate(() => {
     const handleInput = document.querySelector('#mf-h');
     const container = handleInput ? handleInput.closest('form, .modal, .modal-content, div') : document;
     const btns = Array.from((container || document).querySelectorAll('button, input[type="submit"], input[type="button"]'));
 
-    // #send 以外のボタンで、送金/送信/実行/Submitテキストを持つものを優先
     const sBtn = btns.find(b => {
       if (b.id === 'send') return false;
       const t = (b.innerText || b.textContent || b.value || '').trim();
@@ -282,7 +281,6 @@ async function executeBotPost(retryCount = 0) {
     const rawMode = (process.env.MODE || process.env.INPUT_MODE || '').trim().toLowerCase();
     const isGitHubManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
 
-    // 手動イベントや特定モードの判定
     const isExplicitEvent = 
       isGitHubManual ||
       rawMode === 'event_now' ||
@@ -298,7 +296,6 @@ async function executeBotPost(retryCount = 0) {
     const customKeyword = (process.env.CUSTOM_KEYWORD || '').trim();
     const eventCoins = parseInt(process.env.CUSTOM_COINS || '25', 10) || 25;
 
-    // autoモードのときは18時のみ、手動のときは明示的にイベントモードにする
     const isScheduledEvent = (rawMode === 'auto' && jstHour === 18);
     const isManualEvent = isExplicitEvent && rawMode !== 'auto';
     
@@ -404,26 +401,28 @@ async function executeBotPost(retryCount = 0) {
 
     // 3. アナウンスメッセージ入力 & 投稿
     console.log("3. メッセージを入力・投稿中...");
-    await page.waitForSelector('#c-body', { timeout: 15000 });
-    await page.click('#c-body', { clickCount: 3 }).catch(() => {});
-    await page.type('#c-body', message, { delay: 60 });
-    await page.evaluate(() => {
-      const textarea = document.querySelector('#c-body');
-      if (textarea) {
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    });
+    await setPostText(page, message);
     await new Promise(r => setTimeout(r, 2000));
 
     if (isMorningBot) {
       const imagePath = path.resolve('./george.jpg');
+      console.log(`[画像添付チェック] パス: ${imagePath}, 存在: ${fs.existsSync(imagePath)}`);
       if (fs.existsSync(imagePath)) {
-        const fileInput = await page.$('input[type="file"]');
-        if (fileInput) {
-          await fileInput.uploadFile(imagePath);
-          await new Promise(r => setTimeout(r, 2000));
+        try {
+          await page.waitForSelector('input[type="file"]', { timeout: 5000 });
+          const fileInput = await page.$('input[type="file"]');
+          if (fileInput) {
+            await fileInput.uploadFile(imagePath);
+            console.log("✓ george.jpg のアップロードに成功しました。");
+            await new Promise(r => setTimeout(r, 2000));
+          } else {
+            console.log("⚠️ fileInput 要素が見つかりませんでした。");
+          }
+        } catch (e) {
+          console.log("⚠️ 画像アップロード用 input の待機に失敗しました:", e.message);
         }
+      } else {
+        console.log("⚠️ george.jpg が見つかりません。");
       }
     }
 
@@ -466,7 +465,6 @@ async function executeBotPost(retryCount = 0) {
     console.log("アナウンス投稿完了！タイムラインの反映を待機中...");
     await new Promise(r => setTimeout(r, 4000));
 
-    // BOT自身の投稿を特定
     const myBotUser = (process.env.SNS_USER || '').replace(/^@/, '').trim().toLowerCase();
     let botPostInfo = null;
 
@@ -518,12 +516,11 @@ async function executeBotPost(retryCount = 0) {
       console.log("⚠️ 基準BOT投稿IDが自動検出できなかったため、最新の投稿から走査します。");
     }
 
-    // イベント中の5分間審査処理 (投稿後5分間タイマーで正解者を監視し、5分経過後に優勝者へ送金)
     if (isEventHour && keyword) {
       console.log(`[イベント審査開始] お題: 『${keyword}』 (投稿から5分間/300秒経過後に送金処理を実施します)`);
 
       const startTime = Date.now();
-      const competitionDurationMs = 5 * 60 * 1000; // 5分間 (300,000ミリ秒) 待機＆スキャン
+      const competitionDurationMs = 5 * 60 * 1000;
       const qualifiedSubmissions = new Map();
       let scanCycle = 0;
 
@@ -652,7 +649,6 @@ async function executeBotPost(retryCount = 0) {
       }
 
       if (winner) {
-        // 記録を保存
         const winnerRecord = {
           date: new Date().toISOString().slice(0, 10),
           handle: winner.handle,
@@ -662,7 +658,6 @@ async function executeBotPost(retryCount = 0) {
         };
         saveWinner(winnerRecord);
 
-        // 手動イベントのみコイン送金を実施 (18時定時イベントはコイン配布廃止)
         if (isManualEvent) {
           try {
             await sendCoinsToUser(page, winner.handle, eventCoins, `タイピング選手権 優勝賞金 (${eventCoins}コイン)`);
@@ -683,16 +678,7 @@ async function executeBotPost(retryCount = 0) {
 
           const resultMsg = `【全国アナウンス（BOT）】\n${winnerTitle}\n@${winner.handle} さん${winnerDisplayName}でした！\n\n制限時間5分の中で、最速での正解おめでとうございます！\n${rewardNotice}\n\n${currentSummary}\n#全国アナウンスBOT`;
 
-          await page.waitForSelector('#c-body', { timeout: 15000 });
-          await page.click('#c-body', { clickCount: 3 }).catch(() => {});
-          await page.type('#c-body', resultMsg, { delay: 60 });
-          await page.evaluate(() => {
-            const textarea = document.querySelector('#c-body');
-            if (textarea) {
-              textarea.dispatchEvent(new Event('input', { bubbles: true }));
-              textarea.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-          });
+          await setPostText(page, resultMsg);
           await new Promise(r => setTimeout(r, 2000));
           await clickPostButton(page);
           await new Promise(r => setTimeout(r, 4000));
@@ -708,8 +694,8 @@ async function executeBotPost(retryCount = 0) {
           const noWinnerMsg = isManualEvent
             ? "【全国アナウンス（BOT）】\n【不定期型イベント終了】\nタイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT"
             : "【全国アナウンス（BOT）】\n本日のデイリータイピング選手権は終了しました。\n制限時間5分以内に正解者はいませんでした。\nまた次回の挑戦をお待ちしています！\n#全国アナウンスBOT";
-          await page.waitForSelector('#c-body', { timeout: 15000 });
-          await page.type('#c-body', noWinnerMsg, { delay: 30 });
+          
+          await setPostText(page, noWinnerMsg);
           await new Promise(r => setTimeout(r, 1000));
           await clickPostButton(page);
           await new Promise(r => setTimeout(r, 4000));
@@ -744,3 +730,5 @@ executeBotPost().catch(err => {
   console.error("致命的エラーで終了しました:", err);
   process.exit(1);
 });
+
+// ©︎kakuzatou
