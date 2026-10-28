@@ -39,15 +39,20 @@ function loadWinners() {
   return [];
 }
 
-function saveWinner(winnerRecord) {
+function saveWinners(records) {
   try {
     const winners = loadWinners();
-    winners.push(winnerRecord);
+    const recordsArray = Array.isArray(records) ? records : [records];
+    winners.push(...recordsArray);
     fs.writeFileSync(WINNERS_FILE, JSON.stringify(winners, null, 2), 'utf8');
-    console.log(`[記録保存完了] @${winnerRecord.handle} さんの勝利記録を保存しました。`);
+    console.log(`[記録保存完了] ${recordsArray.length}件の記録を保存しました。(累計: ${winners.length}件)`);
   } catch (err) {
     console.error("記録ファイル保存エラー:", err.message);
   }
+}
+
+function saveWinner(winnerRecord) {
+  saveWinners([winnerRecord]);
 }
 
 function formatWinnerSummary() {
@@ -61,14 +66,21 @@ function formatWinnerSummary() {
     const key = w.handle;
     const name = w.name || w.handle;
     if (!counts.has(key)) {
-      counts.set(key, { handle: key, name, wins: 0, lastWin: w.date });
+      counts.set(key, { handle: key, name, wins: 0, totalEntries: 0, lastWin: w.date });
     }
     const item = counts.get(key);
-    item.wins += 1;
+    item.totalEntries += 1;
+    if (!w.rank || w.rank === 1) {
+      item.wins += 1;
+    }
     item.lastWin = w.date;
   }
 
-  const sorted = Array.from(counts.values()).sort((a, b) => b.wins - a.wins);
+  const sorted = Array.from(counts.values()).sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    return b.totalEntries - a.totalEntries;
+  });
+
   const rankingLines = sorted.map((u, i) => {
     const rankMark = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "・";
     return `${rankMark} @${u.handle} (${u.name}): ${u.wins}回`;
@@ -639,24 +651,29 @@ async function executeBotPost(retryCount = 0) {
       }
 
       let winner = null;
+      let sortedSubmissions = [];
       if (qualifiedSubmissions.size > 0) {
-        const sorted = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
+        sortedSubmissions = Array.from(qualifiedSubmissions.values()).sort((a, b) => {
           if (a.postId && b.postId) return a.postId - b.postId;
           return a.discoveredAt - b.discoveredAt;
         });
-        winner = sorted[0];
-        console.log(`[最速1位確定] @${winner.handle} (${winner.name})`);
+        winner = sortedSubmissions[0];
+        console.log(`[最速1位確定] @${winner.handle} (${winner.name}) (正解者総数: ${sortedSubmissions.length}名)`);
       }
 
       if (winner) {
-        const winnerRecord = {
-          date: new Date().toISOString().slice(0, 10),
-          handle: winner.handle,
-          name: winner.name,
+        const eventDate = new Date().toISOString().slice(0, 10);
+        const eventRecords = sortedSubmissions.map((sub, idx) => ({
+          date: eventDate,
+          timestamp: new Date().toISOString(),
+          rank: idx + 1,
+          handle: sub.handle,
+          name: sub.name,
           keyword,
           isManualEvent
-        };
-        saveWinner(winnerRecord);
+        }));
+
+        saveWinners(eventRecords);
 
         if (isManualEvent) {
           try {
