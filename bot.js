@@ -421,10 +421,20 @@ async function executeBotPost(retryCount = 0) {
       console.log(`[画像添付チェック] パス: ${imagePath}, 存在: ${fs.existsSync(imagePath)}`);
       if (fs.existsSync(imagePath)) {
         try {
-          await page.waitForSelector('input[type="file"]', { timeout: 5000 });
-          const fileInput = await page.$('input[type="file"]');
+          await page.waitForSelector('#c-file, input[type="file"]', { timeout: 10000 });
+          const fileInput = await page.$('#c-file') || await page.$('input[type="file"]');
           if (fileInput) {
             await fileInput.uploadFile(imagePath);
+            await page.evaluate(() => {
+              const el = document.querySelector('#c-file') || document.querySelector('input[type="file"]');
+              if (el) {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            });
+            await page.waitForFunction(() => {
+              const el = document.querySelector('#c-file') || document.querySelector('input[type="file"]');
+              return el && el.files && el.files.length > 0;
+            }, { timeout: 5000 }).catch(() => {});
             console.log("✓ george.jpg のアップロードに成功しました。");
             await new Promise(r => setTimeout(r, 2000));
           } else {
