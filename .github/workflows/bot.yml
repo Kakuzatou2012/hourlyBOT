@@ -2,7 +2,7 @@ name: Hourly & 4AM Unified Bot
 
 on:
   schedule:
-    # 毎時0分に自動実行 (UTC 15:00 = JST 0:00, UTC 9:00 = JST 18:00)
+    # 毎時0分に自動実行 (UTC 15:00 = JST 0:00, UTC 19:00 = JST 4:00)
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
@@ -12,20 +12,9 @@ on:
         default: 'auto'
         type: choice
         options:
-          - 'auto'         # 定時自動判定 (毎時アナウンス / 18時はイベント)
-          - 'event_now'    # ★【手動イベント】今すぐ不定期タイピング選手権を開催 (5分審査 ＆ コイン送金)
-          - 'dry_run'      # 安全テストモード (送金直前スクショ ＆ 直近ユーザー確認)
+          - 'auto'         # 定時自動投稿 (4時は画像添付、その他は通常アナウンス)
+          - 'dry_run'      # テストモード (投稿直前スクショ保存)
           - 'force_post'   # 通常アナウンスを即時投稿
-      custom_keyword:
-        description: 'お題キーワード (空欄なら12個の単語からランダム自動選出)'
-        required: false
-        default: ''
-        type: string
-      custom_coins:
-        description: '賞金コイン数 (デフォルト: 25)'
-        required: false
-        default: '25'
-        type: string
 
 concurrency:
   group: bot-execution
@@ -52,22 +41,8 @@ jobs:
           SNS_USER: ${{ secrets.SNS_USER }}
           SNS_PASS: ${{ secrets.SNS_PASS }}
           MODE: ${{ inputs.mode || 'auto' }}
-          CUSTOM_KEYWORD: ${{ inputs.custom_keyword || '' }}
-          CUSTOM_COINS: ${{ inputs.custom_coins || '25' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node bot.js
-
-      - name: Commit and push winners.json
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main || true
-          if [ -f winners.json ]; then
-            git add winners.json
-            git commit -m "auto: update winners.json event records [skip ci]" || echo "No changes to commit"
-            git push origin HEAD:main || echo "Push failed"
-          fi
 
       - name: Upload Screenshots
         if: always()
